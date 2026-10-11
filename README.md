@@ -1,132 +1,80 @@
-# 库存管理系统 (Inventory Management System)
+# ☁️ 云仓 · 智能仓储管理平台
 
-面向中小型制造、零售与贸易企业的全链路库存管理系统。
+![Version](https://img.shields.io/badge/version-v1.0.1-blue) ![Next.js](https://img.shields.io/badge/Next.js-14.2-black) ![Prisma](https://img.shields.io/badge/Prisma-5-2D3748) ![License](https://img.shields.io/badge/license-MIT-green) ![Security](https://img.shields.io/badge/security-audited%20v1.0.1-orange)
 
-## 技术栈
+> 面向中小型制造、零售与贸易企业的全链路库存管理系统。浏览器打开即用，从「货什么时候进来的」到「放在哪个货架哪个格子」，全程可追溯。
 
-- **前端**: Next.js 14 (App Router) + TypeScript + Ant Design 5 + Tailwind CSS
-- **后端**: Next.js Route Handlers + Prisma ORM
-- **数据库**: MySQL 5.7 (InnoDB / utf8mb4)
-- **认证**: NextAuth.js + RBAC
-- **图表**: Recharts
+英文代号 **YUNCANG Inventory Management**。
 
-## 功能模块
+---
 
-### 核心模块 (8大)
-1. **商品/物料管理** - SKU管理、分类体系、规格属性、供应商关联
-2. **入库管理** - 采购入库、退货入库、生产入库、其他入库
-3. **出库管理** - 销售出库、领料出库、审批流程、防超卖
-4. **库存查询** - 实时结存、可用量计算、批次追踪
-5. **盘点管理** - 定期盘点、循环盘点、差异调整
-6. **仓库库位** - 多仓库、库区、库位管理、移库调拨
-7. **预警中心** - 低库存/高库存/临期/呆滞预警
-8. **报表统计** - 收发存、周转率、库龄分析
+## ✨ 功能总览
 
-### 扩展模块
-- BOM物料清单管理
-- 序列号追踪
-- 条码标签打印
-- 成本核算(移动加权/FIFO/月度加权)
-- 通用Excel导出
+**核心 8 大模块**
 
-### 系统设置
-- 用户管理 (RBAC)
-- 角色权限管理
-- 操作日志审计
+| 模块 | 能力 |
+|------|------|
+| 📦 商品/物料管理 | SKU、分类体系、单位换算、规格属性、条码、供应商关联 |
+| ⬇️ 入库管理 | 采购/退货/生产/其他入库、扫码入库、批次与效期 |
+| ⬆️ 出库管理 | 销售/领料出库、审批流程、**乐观锁防超卖** |
+| 🔍 库存查询 | 实时结存、可用量（on_hand − locked）、库位明细、批次追踪 |
+| 📋 盘点管理 | 全盘/循环盘点、差异自动调整 |
+| 🏭 仓库库位 | 多仓库、区域→货位→盒子三级库位、货架地图、移库调拨 |
+| 🔔 预警中心 | 低库存 / 高库存 / 临期 / 呆滞，四类自动预警 |
+| 📊 报表统计 | 收发存、周转率、库龄、移动加权 / FIFO 成本核算 |
 
-## 快速开始
+**扩展能力**：BOM 物料清单 · 序列号追踪 · 条码标签打印 · Excel 导出（exceljs）· 微信小程序端（`wxapp/`）
 
-### 1. 安装依赖
+**系统底座**：RBAC 用户角色权限 · 操作日志审计 · API Token 开放接口 · NextAuth 会话认证
+
+## 🧰 技术栈
+
+Next.js 14 (App Router) · TypeScript · Ant Design 5 · Tailwind CSS · Prisma ORM · MySQL 5.7+/8.0 · NextAuth.js · ioredis · Recharts · exceljs
+
+## 🚀 快速开始
+
 ```bash
-cd inventory-system
+# 1) 安装依赖（Node.js ≥ 18）
 npm install
-```
 
-### 2. 配置环境变量
-```bash
+# 2) 配置环境变量
 cp .env.example .env
-# 编辑 .env，配置数据库连接
+# DATABASE_URL / NEXTAUTH_SECRET（openssl rand -base64 32 生成）/ NEXTAUTH_URL
+
+# 3) 初始化数据库
+npx prisma generate && npx prisma db push
+npx ts-node prisma/seed.ts     # 播种演示数据与预置账号
+
+# 4) 启动
+npm run dev                    # http://localhost:3000
 ```
 
-### 3. 初始化数据库
-```bash
-# 生成 Prisma Client
-npx prisma generate
+**预置账号**：`admin / Admin@123`（管理员）、`wh_manager / User@123`（仓库主管）等，详见使用手册附录。**首次上线请立即改密。**
 
-# 推送 Schema 到数据库
-npx prisma db push
+完整服务器部署（Ubuntu + MySQL + Nginx + HTTPS + systemd 托管）：见 **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**。
 
-# 播种演示数据
-npx ts-node prisma/seed.ts
-```
+## 📚 文档
 
-### 4. 启动开发服务器
-```bash
-npm run dev
-```
+| 文档 | 内容 |
+|------|------|
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | 从零部署上线（保姆级） |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发环境、架构与业务规则 |
+| [docs/CHANGELOG.md](docs/CHANGELOG.md) | 版本历史与迭代路线 |
+| [docs/FIXLOG.md](docs/FIXLOG.md) | 问题修复跟踪 |
+| [docs/SECURITY.md](docs/SECURITY.md) | 安全测试报告与漏洞披露 |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 参与贡献指南 |
+| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | 行为准则 |
 
-访问 http://localhost:3000
+## 🔐 安全
 
-### 预置账号
+- 本项目经过黑盒实测 + 代码审查 + 依赖扫描的安全审计，v1.0.1 已修复全部已发现的高危问题（详见 [docs/SECURITY.md](docs/SECURITY.md)）。
+- 发现漏洞请**勿**公开 Issue，按 [docs/SECURITY.md](docs/SECURITY.md) 的披露政策私下报告。
+- 核心数据安全机制：bcrypt(12) 密码哈希、Prisma 参数化查询、CSRF Origin 校验、接口限流、HTTPS/HSTS/CSP 安全头、库存乐观锁。
 
-| 用户名 | 密码 | 角色 |
-|--------|------|------|
-| admin | Admin@123 | 系统管理员 |
-| wh_manager | User@123 | 仓库主管 |
-| wh_keeper | User@123 | 仓管员 |
-| buyer | User@123 | 采购员 |
-| sales | User@123 | 销售员 |
-| auditor | User@123 | 审计员 |
+## 🤝 参与贡献
 
-## 项目结构
+欢迎一切形式的贡献：报 Bug、提需求、改文档、修代码。新手入门建议从 [docs/FIXLOG.md](docs/FIXLOG.md) 里挑一条带修复方案的待办开始。流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-```
-inventory-system/
-├── prisma/
-│   ├── schema.prisma    # 数据库 Schema (~40张表)
-│   └── seed.ts          # 演示数据种子
-├── src/
-│   ├── app/
-│   │   ├── (dashboard)/ # 仪表盘布局下的所有页面
-│   │   │   ├── page.tsx           # 工作台首页
-│   │   │   ├── products/          # 商品管理
-│   │   │   ├── stock-in/          # 入库管理
-│   │   │   ├── stock-out/         # 出库管理
-│   │   │   ├── inventory/         # 库存查询
-│   │   │   ├── stocktake/         # 盘点管理
-│   │   │   ├── transfers/         # 调拨管理
-│   │   │   ├── warehouse/         # 仓库管理
-│   │   │   ├── alerts/            # 预警中心
-│   │   │   ├── reports/           # 报表中心
-│   │   │   ├── bom/               # BOM管理
-│   │   │   └── settings/          # 系统设置
-│   │   ├── api/                   # RESTful API
-│   │   └── layout.tsx             # 根布局
-│   ├── components/
-│   │   ├── layout/      # 布局组件 (Sidebar)
-│   │   └── ui/          # 通用UI组件
-│   ├── lib/
-│   │   ├── prisma.ts    # Prisma 客户端
-│   │   ├── auth.ts      # NextAuth 配置
-│   │   ├── redis.ts     # Redis 连接
-│   │   ├── constants.ts # 常量定义
-│   │   ├── utils.ts     # 工具函数
-│   │   └── validators.ts # Zod 验证
-│   ├── services/        # 业务服务层
-│   └── types/           # TypeScript 类型
-└── package.json
-```
+## 📄 许可证
 
-## 设计规范
-
-- 主色: 深蓝 #232F3E + 强调橙 #FF9900
-- 语义色: 成功 #2E7D32 / 警告 #ED6C02 / 危险 #D32F2F / 信息 #1976D2
-- 表格斑马纹、卡片圆角 8px、8px 基准栅格
-
-## 核心业务逻辑
-
-- **账实一致**: 所有出入库落地为「单据 + 库存变动 + 流水」三件套
-- **乐观锁防超卖**: `UPDATE inventory SET on_hand = on_hand - ? WHERE on_hand >= ?`
-- **移动加权平均**: 新成本 = (原结存金额 + 本次入库金额) / (原结存量 + 本次入库量)
-- **FIFO**: 按批次生产日期/入库日期升序消耗
-- **可用量计算**: available = on_hand - locked (锁定 = 已分配未发 + 在途 + 盘点冻结)
+[MIT](LICENSE)
