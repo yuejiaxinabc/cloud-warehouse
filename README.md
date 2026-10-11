@@ -23,7 +23,7 @@
 | 🔔 预警中心 | 低库存 / 高库存 / 临期 / 呆滞，四类自动预警 |
 | 📊 报表统计 | 收发存、周转率、库龄、移动加权 / FIFO 成本核算 |
 
-**扩展能力**：BOM 物料清单 · 序列号追踪 · 条码标签打印 · Excel 导出（exceljs）· 微信小程序端（独立项目，仓库地址见 Release 说明）
+**扩展能力**：BOM 物料清单 · 序列号追踪 · 条码标签打印 · Excel 导出（exceljs）· 📱 [微信小程序端](https://github.com/yuejiaxinabc/cloud-warehouse-wxapp)（独立仓库）
 
 **系统底座**：RBAC 用户角色权限 · 操作日志审计 · API Token 开放接口 · NextAuth 会话认证
 
@@ -64,6 +64,7 @@ npm run dev                    # http://localhost:3000
 | [docs/SECURITY.md](docs/SECURITY.md) | 安全测试报告与漏洞披露 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 参与贡献指南 |
 | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | 行为准则 |
+| 📱 [cloud-warehouse-wxapp](https://github.com/yuejiaxinabc/cloud-warehouse-wxapp) | 微信小程序端（独立仓库，含完整文档） |
 
 ## 🔐 安全
 

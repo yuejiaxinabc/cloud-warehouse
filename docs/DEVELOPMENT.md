@@ -109,7 +109,7 @@ src/
 prisma/
 ├── schema.prisma           # 数据模型（~40 表）
 └── seed.ts                 # 演示数据
-# 注：微信小程序端为独立项目（不在本仓库），通过 /api/v1/mp/* 开放接口对接
+# 注：微信小程序端为独立项目（https://github.com/yuejiaxinabc/cloud-warehouse-wxapp），不在本仓库内，通过 /api/v1/mp/* 开放接口对接；其完整文档见该仓库 README
 ```
 
 ## 4. 认证与权限模型
