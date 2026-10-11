@@ -1,0 +1,224 @@
+/* ============================================
+   丝滑微交互 - 全局增强
+   ============================================ */
+
+/* 全局过渡 */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 页面切换淡入 */
+@keyframes pageIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.ant-layout-content > div {
+  animation: pageIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* 卡片悬浮微动 */
+.ant-card {
+  transition: box-shadow 0.25s ease, transform 0.25s ease, border-color 0.25s ease;
+}
+
+.ant-card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  border-color: rgba(22, 119, 255, 0.15);
+}
+
+/* KPI 卡片 */
+.kpi-card {
+  transition: box-shadow 0.25s ease, transform 0.25s ease;
+}
+
+.kpi-card:hover {
+  box-shadow: 0 6px 20px rgba(22, 119, 255, 0.12);
+  transform: translateY(-2px);
+}
+
+/* 按钮按压反馈 */
+.ant-btn {
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.ant-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.ant-btn-primary {
+  box-shadow: 0 2px 6px rgba(22, 119, 255, 0.2);
+  transition: all 0.2s ease;
+}
+
+.ant-btn-primary:hover {
+  box-shadow: 0 4px 12px rgba(22, 119, 255, 0.3);
+}
+
+/* 输入框聚焦光晕 */
+.ant-input:focus,
+.ant-input-focused,
+.ant-input-password:focus-within,
+.ant-select-focused .ant-select-selector {
+  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.1);
+}
+
+/* 表格行悬浮 */
+.ant-table-tbody > tr {
+  transition: background 0.15s ease;
+}
+
+.ant-table-tbody > tr:hover > td {
+  background: #F0F5FF !important;
+}
+
+/* 表格行点击反馈 */
+.ant-table-tbody > tr.ant-table-row {
+  cursor: pointer;
+}
+
+.ant-table-tbody > tr.ant-table-row:active > td {
+  background: #E6F0FF !important;
+}
+
+/* Modal 弹出动画优化 */
+.ant-modal {
+  transform-origin: center center;
+}
+
+.ant-modal-mask {
+  transition: opacity 0.25s ease;
+}
+
+.ant-modal-wrap .ant-modal {
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease;
+}
+
+/* 侧边栏菜单项 */
+.ant-menu-item {
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+
+.ant-menu-item:active {
+  transform: scale(0.98);
+}
+
+/* Tag 过渡 */
+.ant-tag {
+  transition: all 0.15s ease;
+}
+
+/* Badge 数字变化 */
+.ant-badge-count {
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 下拉菜单弹出 */
+.ant-dropdown {
+  transition: opacity 0.15s ease, transform 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 侧边栏折叠过渡 */
+.ant-layout-sider {
+  transition: width 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+.ant-layout-sider .ant-layout-sider-children {
+  transition: opacity 0.15s ease;
+}
+
+/* Header 毛玻璃效果 */
+.ant-layout-header {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.85) !important;
+}
+
+/* 滚动条丝滑 */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D1D5DB;
+  border-radius: 10px;
+  transition: background 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #9CA3AF;
+}
+
+/* 搜索框 */
+.ant-input-search .ant-input {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* 分页器 */
+.ant-pagination-item {
+  transition: all 0.15s ease;
+}
+
+.ant-pagination-item:active {
+  transform: scale(0.95);
+}
+
+/* Select 下拉 */
+.ant-select-item {
+  transition: background 0.1s ease;
+}
+
+/* Switch 开关 */
+.ant-switch {
+  transition: background 0.2s ease;
+}
+
+/* Tooltip */
+.ant-tooltip {
+  transition: opacity 0.15s ease, transform 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Loading 骨架屏脉冲 */
+@keyframes skeletonPulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.4; }
+  100% { opacity: 1; }
+}
+
+.ant-skeleton-content .ant-skeleton-title,
+.ant-skeleton-content .ant-skeleton-paragraph li {
+  animation: skeletonPulse 1.5s ease-in-out infinite;
+}
+
+/* 空状态图标 */
+.ant-empty-image {
+  transition: transform 0.3s ease;
+}
+
+.ant-empty-image:hover {
+  transform: scale(1.05);
+}
+
+/* 移动端优化 */
+@media (max-width: 768px) {
+  /* 禁用 hover 效果避免粘滞 */
+  .ant-card:hover {
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    transform: none;
+  }
+  
+  .kpi-card:hover {
+    transform: none;
+  }
+  
+  /* 按钮更大触控区域 */
+  .ant-btn {
+    min-height: 44px;
+  }
+  
+  /* 表格更紧凑 */
+  .ant-table-tbody > tr > td {
+    padding: 10px 8px !important;
+  }
+}

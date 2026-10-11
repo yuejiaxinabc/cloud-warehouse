@@ -1,0 +1,64 @@
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { serializeBigInt } from "@/lib/serialize";
+
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const keyword = searchParams.get("keyword") || "";
+    const warehouseId = searchParams.get("warehouseId") || "";
+    const productId = searchParams.get("productId") || "";
+    const page = parseInt(searchParams.get("page") || "1");
+    const pageSize = parseInt(searchParams.get("pageSize") || "20");
+
+    const where: any = {};
+    if (keyword) {
+      where.OR = [
+        { product: { name: { contains: keyword } } },
+        { product: { code: { contains: keyword } } },
+        { product: { barcode: { contains: keyword } } },
+      ];
+    }
+    if (warehouseId) where.warehouseId = Number(warehouseId);
+    if (productId) where.productId = Number(productId);
+
+    const [items, total] = await Promise.all([
+      prisma.inventory.findMany({
+        where,
+        include: { product: true, warehouse: true },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        orderBy: { id: "desc" },
+      }),
+      prisma.inventory.count({ where }),
+    ]);
+
+    return NextResponse.json({ success: true, data: serializeBigInt({ items, total, page, pageSize }) });
+  } catch (error: any) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get("id");
+    if (!id) return NextResponse.json({ success: false, error: "缺少ID" }, { status: 400 });
+
+    // 检查库存记录是否存在
+    const inventory = await prisma.inventory.findUnique({ where: { id: Number(id) } });
+    if (!inventory) return NextResponse.json({ success: false, error: "库存记录不存在" }, { status: 404 });
+
+    // 检查是否有锁定量
+    if (Number(inventory.locked) > 0) {
+      return NextResponse.json({ success: false, error: "该库存有锁定量，无法删除" }, { status: 400 });
+    }
+
+    // 删除库存记录
+    await prisma.inventory.delete({ where: { id: Number(id) } });
+
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}

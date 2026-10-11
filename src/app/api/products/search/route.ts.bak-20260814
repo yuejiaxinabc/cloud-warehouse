@@ -1,0 +1,109 @@
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { serializeBigInt } from "@/lib/serialize";
+
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const keyword = searchParams.get("keyword") || "";
+
+    if (!keyword.trim()) {
+      return NextResponse.json(
+        serializeBigInt({ success: true, data: [] })
+      );
+    }
+
+    // 模糊搜索商品（编码、名称、条码、规格、品牌、型号）
+    const products = await prisma.product.findMany({
+      where: {
+        OR: [
+          { code: { contains: keyword } },
+          { name: { contains: keyword } },
+          { barcode: { contains: keyword } },
+          { spec: { contains: keyword } },
+          { brand: { contains: keyword } },
+          { model: { contains: keyword } },
+          { remark: { contains: keyword } },
+        ],
+        status: 1, // 只搜索启用的商品
+      },
+      include: {
+        category: true,
+        unit: true,
+        inventories: {
+          include: {
+            warehouse: true,
+          },
+        },
+      },
+      orderBy: { name: "asc" },
+      take: 50, // 限制返回数量
+    });
+
+    // 展开库存记录，每个仓库/货位一条记录
+    const results: any[] = [];
+
+    for (const product of products) {
+      if (product.inventories.length === 0) {
+        // 没有库存记录的商品也显示
+        results.push({
+          id: product.id.toString(),
+          code: product.code,
+          name: product.name,
+          barcode: product.barcode,
+          spec: product.spec,
+          brand: product.brand,
+          model: product.model,
+          categoryName: product.category?.name || null,
+          unitName: product.unit?.name || null,
+          warehouseId: null,
+          warehouseName: null,
+          locationCode: null,
+          quantity: 0,
+          status: product.status,
+        });
+      } else {
+        // 有库存记录的，按仓库展开
+        for (const inv of product.inventories) {
+          // 尝试获取货位编码
+          let locationCode = null;
+          if (inv.locationId) {
+            const location = await prisma.location.findUnique({
+              where: { id: inv.locationId },
+            });
+            locationCode = location?.code || null;
+          }
+
+          results.push({
+            id: `${product.id}-${inv.warehouseId}`,
+            productId: product.id.toString(),
+            code: product.code,
+            name: product.name,
+            barcode: product.barcode,
+            spec: product.spec,
+            brand: product.brand,
+            model: product.model,
+            categoryName: product.category?.name || null,
+            unitName: product.unit?.name || null,
+            warehouseId: inv.warehouseId?.toString(),
+            warehouseName: inv.warehouse?.name || null,
+            locationCode,
+            quantity: Number(inv.onHand || 0),
+            avgCost: Number(inv.avgCost || 0),
+            status: product.status,
+          });
+        }
+      }
+    }
+
+    return NextResponse.json(
+      serializeBigInt({ success: true, data: results })
+    );
+  } catch (error: any) {
+    console.error("Product search error:", error);
+    return NextResponse.json(
+      serializeBigInt({ success: false, error: error.message }),
+      { status: 500 }
+    );
+  }
+}

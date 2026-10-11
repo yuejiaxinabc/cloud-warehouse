@@ -1,0 +1,122 @@
+"use client";
+
+import React, { useState, useEffect } from "react";
+import { Card, Table, Button, Space, Input, Select, Tag, Typography, Row, Col, Statistic, Popconfirm, message } from "antd";
+import { SearchOutlined, DatabaseOutlined, DollarOutlined, DownloadOutlined, DeleteOutlined } from "@ant-design/icons";
+
+const { Title, Text } = Typography;
+const { Option } = Select;
+
+export default function InventoryPage() {
+  const [keyword, setKeyword] = useState("");
+  const [warehouseFilter, setWarehouseFilter] = useState<number>();
+  const [items, setItems] = useState<any[]>([]);
+  const [warehouses, setWarehouses] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [stats, setStats] = useState({ totalQty: 0, totalValue: 0, totalItems: 0 });
+
+  useEffect(() => { loadData(); }, [keyword, warehouseFilter, page]);
+  useEffect(() => { loadWarehouses(); }, []);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (keyword) params.set("keyword", keyword);
+      if (warehouseFilter) params.set("warehouseId", String(warehouseFilter));
+      params.set("page", String(page));
+      params.set("pageSize", "20");
+      const res = await fetch(`/api/inventory?${params}`);
+      const data = await res.json();
+      if (data.success) {
+        const list = data.data?.items || [];
+        setItems(list);
+        setTotal(data.data?.total || 0);
+        const totalQty = list.reduce((s: number, i: any) => s + Number(i.onHand || 0), 0);
+        const totalValue = list.reduce((s: number, i: any) => s + (Number(i.onHand || 0) * Number(i.avgCost || 0)), 0);
+        setStats({ totalQty, totalValue, totalItems: list.length });
+      }
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  };
+
+  const loadWarehouses = async () => {
+    try {
+      const res = await fetch("/api/warehouse");
+      const data = await res.json();
+      if (data.success) setWarehouses(data.data || []);
+    } catch (e) { console.error(e); }
+  };
+
+  const handleDelete = async (id: number) => {
+    try {
+      const res = await fetch(`/api/inventory?id=${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        message.success("删除成功");
+        loadData();
+      } else {
+        message.error(data.error || "删除失败");
+      }
+    } catch (e) { message.error("删除失败"); }
+  };
+
+  const handleExport = () => {
+    const headers = ["SKU", "商品名称", "仓库", "批次号", "在库量", "锁定量", "可用量", "成本价", "库存价值"];
+    const rows = items.map((r: any) => [
+      r.product?.code || "", r.product?.name || "", r.warehouse?.name || "",
+      r.lotNumber || "", r.onHand || 0, r.locked || 0, (r.onHand || 0) - (r.locked || 0),
+      r.avgCost || 0, ((r.onHand || 0) * (r.avgCost || 0)),
+    ]);
+    const csv = [headers.join(","), ...rows.map((r: any) => r.join(","))].join("\n");
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `库存明细_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const columns = [
+    { title: "商品编码", dataIndex: ["product", "code"], key: "sku", width: 120, render: (_: any, r: any) => r.product?.code || "-" },
+    { title: "商品名称", dataIndex: ["product", "name"], key: "name", width: 180, render: (_: any, r: any) => r.product?.name || "-" },
+    { title: "仓库", dataIndex: ["warehouse", "name"], key: "warehouse", width: 100, render: (_: any, r: any) => r.warehouse?.name || "-" },
+    { title: "批次号", dataIndex: "lotNumber", key: "lotNumber", width: 120 },
+    { title: "在库量", dataIndex: "onHand", key: "onHand", width: 100, render: (v: any) => <span style={{ fontWeight: 600 }}>{Number(v || 0).toLocaleString()}</span> },
+    { title: "锁定量", dataIndex: "locked", key: "locked", width: 80, render: (v: any) => Number(v || 0) > 0 ? <Tag color="orange">{Number(v)}</Tag> : 0 },
+    { title: "可用量", key: "available", width: 100, render: (_: any, r: any) => { const v = Number(r.onHand || 0) - Number(r.locked || 0); return <Text style={{ color: v > 0 ? "#52c41a" : "#ff4d4f", fontWeight: 600 }}>{v.toLocaleString()}</Text>; } },
+    { title: "成本价", dataIndex: "avgCost", key: "avgCost", width: 100, render: (v: any) => v ? `¥${Number(v).toFixed(2)}` : "-" },
+    { title: "库存价值", key: "value", width: 120, render: (_: any, r: any) => { const v = Number(r.onHand || 0) * Number(r.avgCost || 0); return <Text strong style={{ color: "#52c41a" }}>¥${v.toLocaleString()}</Text>; } },
+    {
+      title: "操作", key: "action", width: 80, fixed: "right" as const,
+      render: (_: any, record: any) => (
+        <Popconfirm title="确认删除此库存记录？" onConfirm={() => handleDelete(record.id)} okText="确认" cancelText="取消">
+          <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+        </Popconfirm>
+      ),
+    },
+  ];
+
+  return (
+    <div style={{ padding: 24 }}>
+      <Title level={4} style={{ marginBottom: 24 }}>库存查询</Title>
+
+      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+        <Col xs={24} sm={8}><Card size="small"><Statistic title="库存总量" value={stats.totalQty} suffix="件" valueStyle={{ color: "#1677ff" }} /></Card></Col>
+        <Col xs={24} sm={8}><Card size="small"><Statistic title="库存总价值" value={stats.totalValue} prefix="¥" precision={2} valueStyle={{ color: "#52c41a" }} /></Card></Col>
+        <Col xs={24} sm={8}><Card size="small"><Statistic title="库存条目" value={stats.totalItems} suffix="条" valueStyle={{ color: "#1677ff" }} /></Card></Col>
+      </Row>
+
+      <Card title="库存明细" extra={<Button icon={<DownloadOutlined />} onClick={handleExport}>导出Excel</Button>}>
+        <Space style={{ marginBottom: 16 }} wrap>
+          <Input prefix={<SearchOutlined />} placeholder="搜索商品名称/SKU/条码" value={keyword} onChange={(e) => setKeyword(e.target.value)} style={{ width: 240 }} allowClear />
+          <Select placeholder="选择仓库" allowClear style={{ width: 150 }} onChange={(v) => setWarehouseFilter(v)}>
+            {warehouses.map((w: any) => <Option key={w.id} value={w.id}>{w.name}</Option>)}
+          </Select>
+        </Space>
+        <Table columns={columns} dataSource={items} rowKey="id" loading={loading} scroll={{ x: 1400 }} pagination={{ current: page, total, pageSize: 20, onChange: setPage, showTotal: (t) => `共 ${t} 条` }} size="small" />
+      </Card>
+    </div>
+  );
+}

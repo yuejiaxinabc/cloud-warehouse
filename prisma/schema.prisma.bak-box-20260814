@@ -1,0 +1,1138 @@
+// 数据库连接配置
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== 组织与权限 ====================
+
+model Organization {
+  id        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name      String   @db.VarChar(100)
+  code      String   @unique @db.VarChar(50)
+  parentId  BigInt?  @map("parent_id") @db.UnsignedBigInt
+  status    Int      @default(1) // 1-启用 0-禁用
+  remark    String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  parent   Organization?  @relation("OrgTree", fields: [parentId], references: [id])
+  children Organization[] @relation("OrgTree")
+  users    User[]
+
+  @@map("organizations")
+}
+
+model User {
+  id             BigInt       @id @default(autoincrement()) @db.UnsignedBigInt
+  username       String       @unique @db.VarChar(50)
+  password       String       @db.VarChar(255)
+  realName       String       @map("real_name") @db.VarChar(50)
+  phone          String?      @db.VarChar(20)
+  email          String?      @db.VarChar(100)
+  orgId          BigInt?      @map("org_id") @db.UnsignedBigInt
+  status         Int          @default(1) // 1-启用 0-禁用
+  lastLoginAt    DateTime?    @map("last_login_at")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  organization   Organization? @relation(fields: [orgId], references: [id])
+  userRoles      UserRole[]
+  operationLogs  OperationLog[]
+  exportTasks    ExportTask[]
+
+  @@map("users")
+}
+
+model Role {
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name        String   @db.VarChar(50)
+  code        String   @unique @db.VarChar(50)
+  remark      String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  status      Int      @default(1)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  rolePermissions RolePermission[]
+  userRoles       UserRole[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name        String   @db.VarChar(50)
+  code        String   @unique @db.VarChar(100)
+  type        String   @db.VarChar(20) // menu/button/api
+  parentId    BigInt?  @map("parent_id") @db.UnsignedBigInt
+  path        String?  @db.VarChar(200)
+  icon        String?  @db.VarChar(100)
+  sort        Int      @default(0)
+  status      Int      @default(1)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  parent          Permission?      @relation("PermTree", fields: [parentId], references: [id])
+  children        Permission[]     @relation("PermTree")
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  roleId       BigInt   @map("role_id") @db.UnsignedBigInt
+  permissionId BigInt   @map("permission_id") @db.UnsignedBigInt
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  id        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  userId    BigInt   @map("user_id") @db.UnsignedBigInt
+  roleId    BigInt   @map("role_id") @db.UnsignedBigInt
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@map("user_roles")
+}
+
+// ==================== 基础数据 ====================
+
+model Unit {
+  id        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name      String   @db.VarChar(20)
+  code      String   @unique @db.VarChar(20)
+  status    Int      @default(1)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  products Product[]
+
+  @@map("units")
+}
+
+model Category {
+  id        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name      String   @db.VarChar(100)
+  code      String   @unique @db.VarChar(50)
+  parentId  BigInt?  @map("parent_id") @db.UnsignedBigInt
+  level     Int      @default(1)
+  sort      Int      @default(0)
+  status    Int      @default(1)
+  remark    String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  parent   Category?  @relation("CatTree", fields: [parentId], references: [id])
+  children Category[] @relation("CatTree")
+  products Product[]
+
+  @@map("categories")
+}
+
+model Supplier {
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name        String   @db.VarChar(200)
+  code        String   @unique @db.VarChar(50)
+  contact     String?  @db.VarChar(50)
+  phone       String?  @db.VarChar(20)
+  email       String?  @db.VarChar(100)
+  address     String?  @db.VarChar(500)
+  bankAccount String?  @map("bank_account") @db.VarChar(100)
+  bankName    String?  @map("bank_name") @db.VarChar(100)
+  taxNo       String?  @map("tax_no") @db.VarChar(50)
+  status      Int      @default(1)
+  remark      String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  productSuppliers ProductSupplier[]
+  purchaseOrders   PurchaseOrder[]
+  inboundOrders    InboundOrder[]
+
+  @@map("suppliers")
+}
+
+model Customer {
+  id        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name      String   @db.VarChar(200)
+  code      String   @unique @db.VarChar(50)
+  contact   String?  @db.VarChar(50)
+  phone     String?  @db.VarChar(20)
+  email     String?  @db.VarChar(100)
+  address   String?  @db.VarChar(500)
+  status    Int      @default(1)
+  remark    String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  salesOrders SalesOrder[]
+  outboundOrders OutboundOrder[]
+
+  @@map("customers")
+}
+
+// ==================== 商品 ====================
+
+model Product {
+  id             BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name           String   @db.VarChar(200)
+  code           String   @unique @db.VarChar(50)
+  barcode        String?  @unique @db.VarChar(50)
+  categoryId     BigInt?  @map("category_id") @db.UnsignedBigInt
+  unitId         BigInt?  @map("unit_id") @db.UnsignedBigInt
+  spec           String?  @db.VarChar(500) // 规格说明
+  specJson       Json?    @map("spec_json") // 结构化规格JSON
+  brand          String?  @db.VarChar(100)
+  model          String?  @db.VarChar(100)
+  weight         Decimal? @db.Decimal(10, 3)
+  volume         Decimal? @db.Decimal(10, 4)
+  safetyStock    Decimal? @map("safety_stock") @db.Decimal(18, 3)
+  maxStock       Decimal? @map("max_stock") @db.Decimal(18, 3)
+  leadTimeDays   Int?     @map("lead_time_days")
+  shelfLifeDays  Int?     @map("shelf_life_days")
+  defaultCost    Decimal? @map("default_cost") @db.Decimal(18, 4)
+  salePrice      Decimal? @map("sale_price") @db.Decimal(18, 4)
+  costMethod     String   @map("cost_method") @db.VarChar(20) // WEIGHTED/FIFO/MONTHLY
+  enableSerial   Boolean  @map("enable_serial") @default(false)
+  enableBatch    Boolean  @map("enable_batch") @default(false)
+  status         Int      @default(1) // 1-启用 0-禁用
+  remark         String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  category         Category?          @relation(fields: [categoryId], references: [id])
+  unit             Unit?              @relation(fields: [unitId], references: [id])
+  productSuppliers ProductSupplier[]
+  skuVariants      SkuVariant[]
+  inventories      Inventory[]
+  inventoryLots    InventoryLot[]
+  locationStocks   LocationStock[]
+  serialNumbers    SerialNumber[]
+  inboundItems     InboundItem[]
+  outboundItems    OutboundItem[]
+  countItems       CountItem[]
+  purchaseItems    PurchaseItem[]
+  salesItems       SalesItem[]
+  bomItems         BomItem[]
+  transferItems    TransferItem[]
+  boms             Bom[]
+  costSettings     ProductCostSetting[]
+  costSnapshots    CostSnapshot[]
+
+  @@map("products")
+}
+
+model ProductSupplier {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  productId  BigInt   @map("product_id") @db.UnsignedBigInt
+  supplierId BigInt   @map("supplier_id") @db.UnsignedBigInt
+  isDefault  Boolean  @map("is_default") @default(false)
+  purchasePrice Decimal? @map("purchase_price") @db.Decimal(18, 4)
+  leadDays   Int?     @map("lead_days")
+  remark     String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, supplierId])
+  @@map("product_suppliers")
+}
+
+model SkuVariant {
+  id        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  productId BigInt   @map("product_id") @db.UnsignedBigInt
+  sku       String   @unique @db.VarChar(100)
+  attrJson  Json     @map("attr_json") // {"颜色":"红","尺寸":"XL"}
+  barcode   String?  @db.VarChar(50)
+  price     Decimal? @db.Decimal(18, 4)
+  status    Int      @default(1)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("sku_variants")
+}
+
+// ==================== 仓库 ====================
+
+model Warehouse {
+  id        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name      String   @db.VarChar(100)
+  code      String   @unique @db.VarChar(50)
+  address   String?  @db.VarChar(500)
+  contact   String?  @db.VarChar(50)
+  phone     String?  @db.VarChar(20)
+  status    Int      @default(1)
+  remark    String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  zones         Zone[]
+  inventories   Inventory[]
+  inventoryLots InventoryLot[]
+  locationStocks LocationStock[]
+  outboundOrders OutboundOrder[]
+  inboundOrders  InboundOrder[]
+  countOrders    CountOrder[]
+
+  @@map("warehouses")
+}
+
+model Zone {
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name        String   @db.VarChar(100)
+  code        String   @db.VarChar(50)
+  warehouseId BigInt   @map("warehouse_id") @db.UnsignedBigInt
+  type        String?  @db.VarChar(20) // storage/staging/quarantine
+  status      Int      @default(1)
+  remark      String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+  locations Location[]
+
+  @@unique([warehouseId, code])
+  @@map("zones")
+}
+
+model Location {
+  id        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name      String   @db.VarChar(100)
+  code      String   @db.VarChar(50)
+  zoneId    BigInt   @map("zone_id") @db.UnsignedBigInt
+  type      String?  @db.VarChar(20) // shelf/floor/rack
+  capacity  Decimal? @db.Decimal(18, 3)
+  status    Int      @default(1)
+  remark    String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  zone Zone @relation(fields: [zoneId], references: [id])
+  locationStocks LocationStock[]
+
+  @@unique([zoneId, code])
+  @@map("locations")
+}
+
+// ==================== 库存核心 ====================
+
+model Inventory {
+  id          BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  productId   BigInt    @map("product_id") @db.UnsignedBigInt
+  warehouseId BigInt    @map("warehouse_id") @db.UnsignedBigInt
+  locationId  BigInt?   @map("location_id") @db.UnsignedBigInt
+  skuVariantId BigInt?  @map("sku_variant_id") @db.UnsignedBigInt
+  onHand      Decimal   @map("on_hand") @default(0) @db.Decimal(18, 3) // 在手量
+  locked      Decimal   @default(0) @db.Decimal(18, 3) // 锁定量
+  // available 是生成列：on_hand - locked
+  available   Decimal   @default(0) @db.Decimal(18, 3) // @map("available")
+  avgCost     Decimal?  @map("avg_cost") @db.Decimal(18, 4) // 移动加权平均成本
+  version     Int       @default(0) // 乐观锁版本号
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  product    Product     @relation(fields: [productId], references: [id])
+  warehouse  Warehouse   @relation(fields: [warehouseId], references: [id])
+  locationStocks LocationStock[]
+
+  @@unique([productId, warehouseId, skuVariantId])
+  @@map("inventory")
+}
+
+
+model LocationStock {
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  inventoryId BigInt   @map("inventory_id") @db.UnsignedBigInt
+  productId   BigInt   @map("product_id") @db.UnsignedBigInt
+  warehouseId BigInt   @map("warehouse_id") @db.UnsignedBigInt
+  locationId  BigInt   @map("location_id") @db.UnsignedBigInt
+  lotNumber   String?  @map("lot_number") @db.VarChar(50)
+  quantity    Decimal  @db.Decimal(18, 3)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  inventory Inventory @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id])
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+  location  Location  @relation(fields: [locationId], references: [id])
+
+  @@index([inventoryId])
+  @@index([locationId])
+  @@map("location_stocks")
+}
+
+model InventoryLot {
+  id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  productId    BigInt   @map("product_id") @db.UnsignedBigInt
+  warehouseId  BigInt   @map("warehouse_id") @db.UnsignedBigInt
+  lotNumber    String   @map("lot_number") @db.VarChar(50)
+  skuVariantId BigInt?  @map("sku_variant_id") @db.UnsignedBigInt
+  quantity     Decimal  @db.Decimal(18, 3)
+  costPrice    Decimal? @map("cost_price") @db.Decimal(18, 4)
+  producedAt   DateTime? @map("produced_at")
+  expiredAt    DateTime? @map("expired_at")
+  status       Int      @default(1) // 1-可用 2-冻结 3-过期
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  product   Product   @relation(fields: [productId], references: [id])
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+
+  @@map("inventory_lots")
+}
+
+model InventoryTransaction {
+  id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  txnType      String   @map("txn_type") @db.VarChar(30) // INBOUND/OUTBOUND/TRANSFER/ADJUST/LOCK/UNLOCK
+  refType      String   @map("ref_type") @db.VarChar(30) // 单据类型
+  refId        BigInt   @map("ref_id") @db.UnsignedBigInt
+  refNo        String   @map("ref_no") @db.VarChar(50)
+  productId    BigInt   @map("product_id") @db.UnsignedBigInt
+  warehouseId  BigInt   @map("warehouse_id") @db.UnsignedBigInt
+  skuVariantId BigInt?  @map("sku_variant_id") @db.UnsignedBigInt
+  lotNumber    String?  @map("lot_number") @db.VarChar(50)
+  quantity      Decimal  @db.Decimal(18, 3) // 正数入库，负数出库
+  costPrice    Decimal? @map("cost_price") @db.Decimal(18, 4)
+  beforeQty    Decimal? @map("before_qty") @db.Decimal(18, 3)
+  afterQty     Decimal? @map("after_qty") @db.Decimal(18, 3)
+  operatorId   BigInt?  @map("operator_id") @db.UnsignedBigInt
+  remark       String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  txnTime      DateTime @map("txn_time") @default(now())
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([productId, warehouseId])
+  @@index([refType, refId])
+  @@index([txnTime])
+  @@map("inventory_transactions")
+}
+
+model SerialNumber {
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  productId   BigInt   @map("product_id") @db.UnsignedBigInt
+  serialNo    String   @unique @map("serial_no") @db.VarChar(100)
+  status      String   @db.VarChar(20) // IN_STOCK/SOLD/RETURNED/SCRAPPED
+  warehouseId BigInt?  @map("warehouse_id") @db.UnsignedBigInt
+  lotNumber   String?  @map("lot_number") @db.VarChar(50)
+  remark      String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([productId, status])
+  @@map("serial_numbers")
+}
+
+// ==================== 入库 ====================
+
+model InboundOrder {
+  id            BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  orderNo       String    @unique @map("order_no") @db.VarChar(50)
+  type          String    @db.VarChar(20) // PURCHASE/RETURN/TRANSFER/OTHER
+  warehouseId   BigInt    @map("warehouse_id") @db.UnsignedBigInt
+  supplierId    BigInt?   @map("supplier_id") @db.UnsignedBigInt
+  status        String    @db.VarChar(20) // DRAFT/POSTED/CANCELLED
+  totalAmount   Decimal?  @map("total_amount") @db.Decimal(18, 4)
+  totalQty      Decimal?  @map("total_qty") @db.Decimal(18, 3)
+  remark        String?   @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  postedAt      DateTime? @map("posted_at")
+  operatorId    BigInt?   @map("operator_id") @db.UnsignedBigInt
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  supplier      Supplier?       @relation(fields: [supplierId], references: [id])
+  warehouse    Warehouse     @relation(fields: [warehouseId], references: [id])
+  inboundItems  InboundItem[]
+
+  @@map("inbound_orders")
+}
+
+model InboundItem {
+  id            BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  orderId       BigInt   @map("order_id") @db.UnsignedBigInt
+  productId     BigInt   @map("product_id") @db.UnsignedBigInt
+  skuVariantId  BigInt?  @map("sku_variant_id") @db.UnsignedBigInt
+  lotNumber     String?  @map("lot_number") @db.VarChar(50)
+  quantity      Decimal  @db.Decimal(18, 3)
+  receivedQty   Decimal? @map("received_qty") @db.Decimal(18, 3)
+  costPrice     Decimal? @map("cost_price") @db.Decimal(18, 4)
+  amount        Decimal? @db.Decimal(18, 4)
+  remark        String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  order   InboundOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product      @relation(fields: [productId], references: [id])
+  lotAllocations InboundLotAllocation[]
+
+  @@map("inbound_items")
+}
+
+model InboundLotAllocation {
+  id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  inboundItemId BigInt  @map("inbound_item_id") @db.UnsignedBigInt
+  lotNumber    String   @map("lot_number") @db.VarChar(50)
+  quantity     Decimal  @db.Decimal(18, 3)
+  costPrice    Decimal? @map("cost_price") @db.Decimal(18, 4)
+  producedAt   DateTime? @map("produced_at")
+  expiredAt    DateTime? @map("expired_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  inboundItem InboundItem @relation(fields: [inboundItemId], references: [id], onDelete: Cascade)
+
+  @@map("inbound_lot_allocations")
+}
+
+// ==================== 出库 ====================
+
+model OutboundOrder {
+  id           BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  orderNo      String    @unique @map("order_no") @db.VarChar(50)
+  type         String    @db.VarChar(20) // SALE/RETURN/TRANSFER/OTHER
+  warehouseId  BigInt    @map("warehouse_id") @db.UnsignedBigInt
+  customerId   BigInt?   @map("customer_id") @db.UnsignedBigInt
+  status       String    @db.VarChar(20) // DRAFT/LOCKED/POSTED/CANCELLED
+  totalAmount  Decimal?  @map("total_amount") @db.Decimal(18, 4)
+  totalQty     Decimal?  @map("total_qty") @db.Decimal(18, 3)
+  remark       String?   @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  lockedAt     DateTime? @map("locked_at")
+  postedAt     DateTime? @map("posted_at")
+  operatorId   BigInt?   @map("operator_id") @db.UnsignedBigInt
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  customer      Customer?        @relation(fields: [customerId], references: [id])
+  warehouse    Warehouse     @relation(fields: [warehouseId], references: [id])
+  outboundItems OutboundItem[]
+
+  @@map("outbound_orders")
+}
+
+model OutboundItem {
+  id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  orderId      BigInt   @map("order_id") @db.UnsignedBigInt
+  productId    BigInt   @map("product_id") @db.UnsignedBigInt
+  skuVariantId BigInt?  @map("sku_variant_id") @db.UnsignedBigInt
+  quantity     Decimal  @db.Decimal(18, 3)
+  pickedQty    Decimal? @map("picked_qty") @db.Decimal(18, 3)
+  costPrice    Decimal? @map("cost_price") @db.Decimal(18, 4)
+  amount       Decimal? @db.Decimal(18, 4)
+  remark       String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  order         OutboundOrder     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product       Product           @relation(fields: [productId], references: [id])
+  lotPicks      OutboundLotPick[]
+
+  @@map("outbound_items")
+}
+
+model OutboundLotPick {
+  id             BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  outboundItemId BigInt   @map("outbound_item_id") @db.UnsignedBigInt
+  lotNumber      String   @map("lot_number") @db.VarChar(50)
+  quantity       Decimal  @db.Decimal(18, 3)
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  outboundItem OutboundItem @relation(fields: [outboundItemId], references: [id], onDelete: Cascade)
+
+  @@map("outbound_lot_picks")
+}
+
+// ==================== 调拨 ====================
+
+model TransferOrder {
+  id           BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  orderNo      String    @unique @map("order_no") @db.VarChar(50)
+  fromWhId     BigInt    @map("from_wh_id") @db.UnsignedBigInt
+  toWhId       BigInt    @map("to_wh_id") @db.UnsignedBigInt
+  status       String    @db.VarChar(20) // DRAFT/SENT/RECEIVED/CANCELLED
+  remark       String?   @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  sentAt       DateTime? @map("sent_at")
+  receivedAt   DateTime? @map("received_at")
+  operatorId   BigInt?   @map("operator_id") @db.UnsignedBigInt
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  transferItems TransferItem[]
+
+  @@map("transfer_orders")
+}
+
+model TransferItem {
+  id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  orderId      BigInt   @map("order_id") @db.UnsignedBigInt
+  productId    BigInt   @map("product_id") @db.UnsignedBigInt
+  skuVariantId BigInt?  @map("sku_variant_id") @db.UnsignedBigInt
+  quantity     Decimal  @db.Decimal(18, 3)
+  sentQty      Decimal? @map("sent_qty") @db.Decimal(18, 3)
+  receivedQty  Decimal? @map("received_qty") @db.Decimal(18, 3)
+  remark       String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  order   TransferOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product       @relation(fields: [productId], references: [id])
+
+  @@map("transfer_items")
+}
+
+// ==================== 盘点 ====================
+
+model CountOrder {
+  id           BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  orderNo      String    @unique @map("order_no") @db.VarChar(50)
+  warehouseId  BigInt    @map("warehouse_id") @db.UnsignedBigInt
+  type         String    @db.VarChar(20) // FULL/PARTIAL/CYCLE
+  status       String    @db.VarChar(20) // DRAFT/COUNTING/ADJUSTED/CANCELLED
+  remark       String?   @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  adjustedAt   DateTime? @map("adjusted_at")
+  operatorId   BigInt?   @map("operator_id") @db.UnsignedBigInt
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  warehouse    Warehouse     @relation(fields: [warehouseId], references: [id])
+  countItems      CountItem[]
+  countAdjustments CountAdjustment[]
+
+  @@map("count_orders")
+}
+
+model CountItem {
+  id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  orderId      BigInt   @map("order_id") @db.UnsignedBigInt
+  productId    BigInt   @map("product_id") @db.UnsignedBigInt
+  skuVariantId BigInt?  @map("sku_variant_id") @db.UnsignedBigInt
+  systemQty    Decimal  @map("system_qty") @db.Decimal(18, 3) // 系统库存
+  countQty     Decimal? @map("count_qty") @db.Decimal(18, 3) // 实盘数量
+  diffQty      Decimal? @map("diff_qty") @db.Decimal(18, 3) // 差异数量
+  remark       String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  order   CountOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product    @relation(fields: [productId], references: [id])
+
+  @@map("count_items")
+}
+
+model CountAdjustment {
+  id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  orderId      BigInt   @map("order_id") @db.UnsignedBigInt
+  productId    BigInt   @map("product_id") @db.UnsignedBigInt
+  warehouseId  BigInt   @map("warehouse_id") @db.UnsignedBigInt
+  adjustQty    Decimal  @map("adjust_qty") @db.Decimal(18, 3)
+  adjustType   String   @map("adjust_type") @db.VarChar(10) // INCREASE/DECREASE
+  costPrice    Decimal? @map("cost_price") @db.Decimal(18, 4)
+  remark       String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  order CountOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("count_adjustments")
+}
+
+// ==================== 采购 ====================
+
+model PurchaseOrder {
+  id            BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  orderNo       String    @unique @map("order_no") @db.VarChar(50)
+  supplierId    BigInt    @map("supplier_id") @db.UnsignedBigInt
+  status        String    @db.VarChar(20) // DRAFT/APPROVED/RECEIVING/CLOSED/CANCELLED
+  totalAmount   Decimal?  @map("total_amount") @db.Decimal(18, 4)
+  totalQty      Decimal?  @map("total_qty") @db.Decimal(18, 3)
+  receivedQty   Decimal?  @map("received_qty") @db.Decimal(18, 3)
+  expectedDate  DateTime? @map("expected_date")
+  remark        String?   @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  operatorId    BigInt?   @map("operator_id") @db.UnsignedBigInt
+  approvedAt    DateTime? @map("approved_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  supplier      Supplier      @relation(fields: [supplierId], references: [id])
+  purchaseItems PurchaseItem[]
+
+  @@map("purchase_orders")
+}
+
+model PurchaseItem {
+  id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  orderId      BigInt   @map("order_id") @db.UnsignedBigInt
+  productId    BigInt   @map("product_id") @db.UnsignedBigInt
+  skuVariantId BigInt?  @map("sku_variant_id") @db.UnsignedBigInt
+  quantity     Decimal  @db.Decimal(18, 3)
+  receivedQty  Decimal? @map("received_qty") @db.Decimal(18, 3)
+  unitPrice    Decimal  @map("unit_price") @db.Decimal(18, 4)
+  amount       Decimal? @db.Decimal(18, 4)
+  remark       String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  order   PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product       @relation(fields: [productId], references: [id])
+
+  @@map("purchase_items")
+}
+
+// ==================== 销售 ====================
+
+model SalesOrder {
+  id           BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  orderNo      String    @unique @map("order_no") @db.VarChar(50)
+  customerId   BigInt    @map("customer_id") @db.UnsignedBigInt
+  status       String    @db.VarChar(20) // DRAFT/APPROVED/SHIPPED/CLOSED/CANCELLED
+  totalAmount  Decimal?  @map("total_amount") @db.Decimal(18, 4)
+  totalQty     Decimal?  @map("total_qty") @db.Decimal(18, 3)
+  shippedQty   Decimal?  @map("shipped_qty") @db.Decimal(18, 3)
+  expectedDate DateTime? @map("expected_date")
+  remark       String?   @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  operatorId   BigInt?   @map("operator_id") @db.UnsignedBigInt
+  approvedAt   DateTime? @map("approved_at")
+  shippedAt    DateTime? @map("shipped_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  customer    Customer    @relation(fields: [customerId], references: [id])
+  salesItems  SalesItem[]
+
+  @@map("sales_orders")
+}
+
+model SalesItem {
+  id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  orderId      BigInt   @map("order_id") @db.UnsignedBigInt
+  productId    BigInt   @map("product_id") @db.UnsignedBigInt
+  skuVariantId BigInt?  @map("sku_variant_id") @db.UnsignedBigInt
+  quantity     Decimal  @db.Decimal(18, 3)
+  shippedQty   Decimal? @map("shipped_qty") @db.Decimal(18, 3)
+  unitPrice    Decimal  @map("unit_price") @db.Decimal(18, 4)
+  amount       Decimal? @db.Decimal(18, 4)
+  remark       String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  order   SalesOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product    @relation(fields: [productId], references: [id])
+
+  @@map("sales_items")
+}
+
+// ==================== BOM ====================
+
+model Bom {
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name        String   @db.VarChar(200)
+  code        String   @unique @db.VarChar(50)
+  productId   BigInt   @map("product_id") @db.UnsignedBigInt // 成品
+  version     String   @db.VarChar(20) @default("1.0")
+  status      Int      @default(1)
+  remark      String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  product  Product   @relation(fields: [productId], references: [id])
+  bomItems BomItem[]
+
+  @@map("boms")
+}
+
+model BomItem {
+  id        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  bomId     BigInt   @map("bom_id") @db.UnsignedBigInt
+  productId BigInt   @map("product_id") @db.UnsignedBigInt // 物料
+  quantity  Decimal  @db.Decimal(18, 3) // 单位用量
+  wastage   Decimal? @db.Decimal(5, 2) @default(0) // 损耗率%
+  remark    String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt DateTime @default(now()) @map("created_at")
+
+  bom     Bom     @relation(fields: [bomId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@map("bom_items")
+}
+
+// ==================== 预警 ====================
+
+model AlertRule {
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name        String   @db.VarChar(100)
+  type        String   @db.VarChar(30) // LOW_STOCK/OVERSTOCK/EXPIRY/REORDER
+  targetType  String   @map("target_type") @db.VarChar(20) // PRODUCT/WAREHOUSE/ALL
+  targetId    BigInt?  @map("target_id") @db.UnsignedBigInt
+  condition   Json     // {"threshold": 10, "operator": "lt"}
+  notifyType  String   @map("notify_type") @db.VarChar(20) // SYSTEM/EMAIL/SMS
+  status      Int      @default(1)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  alerts Alert[]
+
+  @@map("alert_rules")
+}
+
+model Alert {
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  ruleId      BigInt   @map("rule_id") @db.UnsignedBigInt
+  productId   BigInt?  @map("product_id") @db.UnsignedBigInt
+  warehouseId BigInt?  @map("warehouse_id") @db.UnsignedBigInt
+  level       String   @db.VarChar(10) // INFO/WARNING/CRITICAL
+  title       String   @db.VarChar(200)
+  content     String?  @db.Text
+  status      String   @db.VarChar(20) @default("UNREAD") // UNREAD/READ/RESOLVED
+  readAt      DateTime? @map("read_at")
+  resolvedAt  DateTime? @map("resolved_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  rule AlertRule @relation(fields: [ruleId], references: [id])
+
+  @@map("alerts")
+}
+
+// ==================== 审批 ====================
+
+model ApprovalFlow {
+  id           BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  refType      String    @map("ref_type") @db.VarChar(30)
+  refId        BigInt    @map("ref_id") @db.UnsignedBigInt
+  refNo        String    @map("ref_no") @db.VarChar(50)
+  status       String    @db.VarChar(20) // PENDING/APPROVED/REJECTED
+  applicantId  BigInt    @map("applicant_id") @db.UnsignedBigInt
+  approverId   BigInt?   @map("approver_id") @db.UnsignedBigInt
+  remark       String?   @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  approvedAt   DateTime? @map("approved_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@index([refType, refId])
+  @@map("approval_flows")
+}
+
+// ==================== 标签打印 ====================
+
+model LabelTemplate {
+  id        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name      String   @db.VarChar(100)
+  code      String   @unique @db.VarChar(50)
+  type      String   @db.VarChar(20) // PRODUCT/LOCATION/LOT
+  content   Json     // 模板JSON定义
+  status    Int      @default(1)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  printJobs LabelPrintJob[]
+
+  @@map("label_templates")
+}
+
+model LabelPrintJob {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  templateId BigInt   @map("template_id") @db.UnsignedBigInt
+  data       Json     // 打印数据
+  copies     Int      @default(1)
+  status     String   @db.VarChar(20) // PENDING/PRINTED/FAILED
+  printer    String?  @db.VarChar(100)
+  operatorId BigInt?  @map("operator_id") @db.UnsignedBigInt
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  template LabelTemplate @relation(fields: [templateId], references: [id])
+
+  @@map("label_print_jobs")
+}
+
+// ==================== 系统 ====================
+
+model ExportTask {
+  id         BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  type       String    @db.VarChar(30) // PRODUCT/INVENTORY/INBOUND/OUTBOUND等
+  status     String    @db.VarChar(20) // PENDING/PROCESSING/COMPLETED/FAILED
+  params     Json?     // 导出参数
+  fileUrl    String?   @map("file_url") @db.VarChar(500)
+  fileName   String?   @map("file_name") @db.VarChar(200)
+  errorMsg   String?   @map("error_msg") @db.Text
+  userId     BigInt?   @map("user_id") @db.UnsignedBigInt
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("export_tasks")
+}
+
+model ReportSnapshot {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  type       String   @db.VarChar(30) // STOCK_MOVEMENT/TURNOVER/AGING
+  period     String   @db.VarChar(20) // 2024-01, 2024-Q1
+  data       Json     // 快照数据
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@unique([type, period])
+  @@map("report_snapshots")
+}
+
+model CostSnapshot {
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  productId   BigInt   @map("product_id") @db.UnsignedBigInt
+  warehouseId BigInt?  @map("warehouse_id") @db.UnsignedBigInt
+  period      String   @db.VarChar(20) // 2024-01
+  beginQty    Decimal? @map("begin_qty") @db.Decimal(18, 3)
+  beginAmount Decimal? @map("begin_amount") @db.Decimal(18, 4)
+  inQty       Decimal? @map("in_qty") @db.Decimal(18, 3)
+  inAmount    Decimal? @map("in_amount") @db.Decimal(18, 4)
+  outQty      Decimal? @map("out_qty") @db.Decimal(18, 3)
+  outAmount   Decimal? @map("out_amount") @db.Decimal(18, 4)
+  endQty      Decimal? @map("end_qty") @db.Decimal(18, 3)
+  endAmount   Decimal? @map("end_amount") @db.Decimal(18, 4)
+  avgCost     Decimal? @map("avg_cost") @db.Decimal(18, 4)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@unique([productId, warehouseId, period])
+  @@map("cost_snapshots")
+}
+
+model ProductCostSetting {
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  productId   BigInt   @unique @map("product_id") @db.UnsignedBigInt
+  costMethod  String   @map("cost_method") @db.VarChar(20) // WEIGHTED/FIFO/MONTHLY
+  remark      String?  @db.VarChar(500)
+  useLocation   String?   @map("use_location") @db.VarChar(100) // 使用地点
+  department    String?   @db.VarChar(50)   // 使用部门
+  shift         String?   @db.VarChar(20)   // 使用班次
+  recipientName String?   @map("recipient_name") @db.VarChar(50)  // 领用人
+  recipientQty  Decimal?  @map("recipient_qty") @db.Decimal(18, 3) // 领用数量
+  deptManager   String?   @map("dept_manager") @db.VarChar(50)   // 部门负责人
+  recipientTime DateTime? @map("recipient_time") // 领用时间
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@map("product_cost_settings")
+}
+
+model OperationLog {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  userId     BigInt?  @map("user_id") @db.UnsignedBigInt
+  module     String   @db.VarChar(50)
+  action     String   @db.VarChar(50)
+  refType    String?  @map("ref_type") @db.VarChar(30)
+  refId      BigInt?  @map("ref_id") @db.UnsignedBigInt
+  content    String?  @db.Text
+  ip         String?  @db.VarChar(50)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([module, action])
+  @@index([createdAt])
+  @@map("operation_logs")
+}

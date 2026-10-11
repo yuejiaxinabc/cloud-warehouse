@@ -1,0 +1,331 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { prisma } from '@/lib/prisma';
+import { serializeBigInt } from '@/lib/serialize';
+
+// 每个货位最多存放的盒子数
+const MAX_BOXES_PER_LOCATION = 10;
+
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const keyword = searchParams.get('keyword') || '';
+    const page = parseInt(searchParams.get('page') || '1');
+    const pageSize = parseInt(searchParams.get('pageSize') || '20');
+    const categoryId = searchParams.get('categoryId') || '';
+    const status = searchParams.get('status') || '';
+
+    const where: any = {};
+    if (keyword) {
+      where.OR = [
+        { name: { contains: keyword } },
+        { code: { contains: keyword } },
+        { barcode: { contains: keyword } },
+      ];
+    }
+    if (categoryId) where.categoryId = Number(categoryId);
+    if (status !== '') where.status = Number(status);
+
+    const [items, total] = await Promise.all([
+      prisma.product.findMany({
+        where,
+        include: { 
+          category: true, 
+          unit: true,
+          inventories: {
+            include: { warehouse: true },
+          },
+        },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        orderBy: { id: 'desc' },
+      }),
+      prisma.product.count({ where }),
+    ]);
+
+    // 计算每个商品的总库存
+    const itemsWithStock = items.map((item: any) => {
+      const totalStock = item.inventories.reduce(
+        (sum: number, inv: any) => sum + Number(inv.onHand || 0), 
+        0
+      );
+      return {
+        ...item,
+        totalStock,
+      };
+    });
+
+    return NextResponse.json({ success: true, data: serializeBigInt({ items: itemsWithStock, total, page, pageSize }) });
+  } catch (error: any) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { 
+      name, code, barcode, categoryId, unitId, spec, brand, model, 
+      safetyStock, maxStock, costMethod, defaultCost, salePrice, remark,
+      warehouseId, initialStock, initialCost
+    } = body;
+
+    if (!name || !code) {
+      return NextResponse.json({ success: false, error: '商品编码和名称必填' }, { status: 400 });
+    }
+
+    // 检查编码唯一性
+    const existing = await prisma.product.findUnique({ where: { code } });
+    if (existing) {
+      return NextResponse.json({ success: false, error: '商品编码已存在' }, { status: 400 });
+    }
+
+    // 使用事务创建商品和初始库存
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. 创建商品
+      const product = await tx.product.create({
+        data: {
+          name, code, barcode: barcode || null,
+          categoryId: categoryId ? Number(categoryId) : null,
+          unitId: unitId ? Number(unitId) : null,
+          spec: spec || null, brand: brand || null, model: model || null,
+          safetyStock: safetyStock ? Number(safetyStock) : null,
+          maxStock: maxStock ? Number(maxStock) : null,
+          costMethod: costMethod || 'WEIGHTED',
+          defaultCost: defaultCost ? Number(defaultCost) : null,
+          salePrice: salePrice ? Number(salePrice) : null,
+          remark: remark || null, status: 1,
+        },
+      });
+
+      // 2. 如果有初始库存，自动分配货位
+      if (warehouseId && initialStock && Number(initialStock) > 0) {
+        const stockQty = Number(initialStock);
+        const costPrice = initialCost ? Number(initialCost) : (defaultCost ? Number(defaultCost) : 0);
+
+        // 获取所有区域和货位（按顺序）
+        const zones = await tx.zone.findMany({
+          where: { warehouseId: BigInt(warehouseId) },
+          orderBy: { code: "asc" },
+          include: {
+            locations: true,
+          },
+        });
+
+        // 对每个区域的货位进行自然排序（A-1-1, A-1-2, ..., A-1-10）
+        for (const zone of zones) {
+          zone.locations.sort((a: any, b: any) => {
+            const partsA = a.code.split('-').map(Number);
+            const partsB = b.code.split('-').map(Number);
+            for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
+              const numA = partsA[i] || 0;
+              const numB = partsB[i] || 0;
+              if (numA !== numB) return numA - numB;
+            }
+            return 0;
+          });
+        }
+
+        // 获取现有库存占用
+        const existingInventories = await tx.inventory.findMany({
+          where: { 
+            warehouseId: BigInt(warehouseId),
+            locationId: { not: null },
+          },
+          select: { locationId: true, onHand: true },
+        });
+
+        // 统计每个货位的已用盒子数
+        const locationUsage: Record<string, number> = {};
+        for (const inv of existingInventories) {
+          const locId = inv.locationId?.toString();
+          if (locId) {
+            locationUsage[locId] = (locationUsage[locId] || 0) + Number(inv.onHand || 0);
+          }
+        }
+
+        // 按顺序找到可用货位并分配
+        let remaining = stockQty;
+        const allocations: { locationId: bigint; locationCode: string; quantity: number }[] = [];
+
+        for (const zone of zones) {
+          if (remaining <= 0) break;
+          for (const location of zone.locations) {
+            if (remaining <= 0) break;
+            
+            const locId = location.id.toString();
+            const used = locationUsage[locId] || 0;
+            const available = MAX_BOXES_PER_LOCATION - used;
+            
+            if (available > 0) {
+              const assign = Math.min(remaining, available);
+              allocations.push({
+                locationId: location.id,
+                locationCode: location.code,
+                quantity: assign,
+              });
+              remaining -= assign;
+            }
+          }
+        }
+
+        if (remaining > 0) {
+          throw new Error(`货位空间不足! 还剩 ${remaining} 件无法分配`);
+        }
+
+        // 为每个分配创建库存记录
+        for (const alloc of allocations) {
+          // 检查是否已有该商品在该货位的库存
+          const existingInv = await tx.inventory.findFirst({
+            where: {
+              productId: product.id,
+              warehouseId: BigInt(warehouseId),
+              locationId: alloc.locationId,
+            },
+          });
+
+          if (existingInv) {
+            // 更新现有库存
+            await tx.inventory.update({
+              where: { id: existingInv.id },
+              data: {
+                onHand: Number(existingInv.onHand) + alloc.quantity,
+                available: Number(existingInv.available) + alloc.quantity,
+                avgCost: costPrice > 0 ? costPrice : existingInv.avgCost,
+              },
+            });
+          } else {
+            // 创建新库存记录
+            await tx.inventory.create({
+              data: {
+                productId: product.id,
+                warehouseId: BigInt(warehouseId),
+                locationId: alloc.locationId,
+                onHand: alloc.quantity,
+                available: alloc.quantity,
+                avgCost: costPrice > 0 ? costPrice : null,
+                version: 0,
+              },
+            });
+          }
+
+          // 创建批次库存记录
+          const lotNumber = `LOT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}-${alloc.locationCode}`;
+          await tx.inventoryLot.create({
+            data: {
+              productId: product.id,
+              warehouseId: BigInt(warehouseId),
+              lotNumber,
+              quantity: alloc.quantity,
+              costPrice: costPrice > 0 ? costPrice : null,
+              status: 1,
+            },
+          });
+
+          // 创建入库流水
+          await tx.inventoryTransaction.create({
+            data: {
+              txnType: 'INBOUND',
+              refType: 'INITIAL',
+              refId: product.id,
+              refNo: `INIT-${code}`,
+              productId: product.id,
+              warehouseId: BigInt(warehouseId),
+              lotNumber,
+              quantity: alloc.quantity,
+              costPrice: costPrice > 0 ? costPrice : null,
+              beforeQty: 0,
+              afterQty: alloc.quantity,
+              remark: `初始库存 - 货位 ${alloc.locationCode}`,
+            },
+          });
+        }
+      }
+
+      return product;
+    });
+
+    return NextResponse.json({ success: true, data: serializeBigInt(result) });
+  } catch (error: any) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}
+
+export async function PUT(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { id, ...updateData } = body;
+
+    if (!id) {
+      return NextResponse.json({ success: false, error: '缺少商品ID' }, { status: 400 });
+    }
+
+    const data: any = {};
+    if (updateData.name) data.name = updateData.name;
+    if (updateData.code) data.code = updateData.code;
+    if (updateData.barcode !== undefined) data.barcode = updateData.barcode || null;
+    if (updateData.categoryId !== undefined) data.categoryId = updateData.categoryId ? Number(updateData.categoryId) : null;
+    if (updateData.unitId !== undefined) data.unitId = updateData.unitId ? Number(updateData.unitId) : null;
+    if (updateData.spec !== undefined) data.spec = updateData.spec || null;
+    if (updateData.brand !== undefined) data.brand = updateData.brand || null;
+    if (updateData.model !== undefined) data.model = updateData.model || null;
+    if (updateData.safetyStock !== undefined) data.safetyStock = updateData.safetyStock ? Number(updateData.safetyStock) : null;
+    if (updateData.maxStock !== undefined) data.maxStock = updateData.maxStock ? Number(updateData.maxStock) : null;
+    if (updateData.costMethod) data.costMethod = updateData.costMethod;
+    if (updateData.defaultCost !== undefined) data.defaultCost = updateData.defaultCost ? Number(updateData.defaultCost) : null;
+    if (updateData.salePrice !== undefined) data.salePrice = updateData.salePrice ? Number(updateData.salePrice) : null;
+    if (updateData.remark !== undefined) data.remark = updateData.remark || null;
+    if (updateData.status !== undefined) data.status = Number(updateData.status);
+
+    const product = await prisma.product.update({
+      where: { id: Number(id) },
+      data,
+    });
+
+    return NextResponse.json({ success: true, data: serializeBigInt(product) });
+  } catch (error: any) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get('id');
+    if (!id) return NextResponse.json({ success: false, error: '缺少商品ID' }, { status: 400 });
+
+    const productId = Number(id);
+
+    // 检查库存是否为0
+    const inventories = await prisma.inventory.findMany({ where: { productId } });
+    const totalStock = inventories.reduce((sum, inv) => sum + Number(inv.onHand || 0), 0);
+    if (totalStock > 0) {
+      return NextResponse.json({ 
+        success: false, 
+        error: `该商品还有库存 ${totalStock}，无法删除。请先清空库存。` 
+      }, { status: 400 });
+    }
+
+    // 删除所有关联记录（按正确的外键依赖顺序）
+    await prisma.$transaction(async (tx) => {
+      await tx.inventoryTransaction.deleteMany({ where: { productId } });
+      await tx.inventoryLot.deleteMany({ where: { productId } });
+      await tx.inventory.deleteMany({ where: { productId } });
+      await tx.costSnapshot.deleteMany({ where: { productId } });
+      await tx.productCostSetting.deleteMany({ where: { productId } });
+      await tx.bomItem.deleteMany({ where: { productId } });
+      await tx.countItem.deleteMany({ where: { productId } });
+      await tx.transferItem.deleteMany({ where: { productId } });
+      await tx.outboundItem.deleteMany({ where: { productId } });
+      await tx.inboundItem.deleteMany({ where: { productId } });
+      await tx.purchaseItem.deleteMany({ where: { productId } });
+      await tx.salesItem.deleteMany({ where: { productId } });
+      await tx.productSupplier.deleteMany({ where: { productId } });
+      await tx.serialNumber.deleteMany({ where: { productId } });
+      await tx.product.delete({ where: { id: productId } });
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}

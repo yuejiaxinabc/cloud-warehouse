@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>云仓库存管理系统</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #f0f2f5; color: #1f2937; min-height: 100vh; }
+    
+    /* 通用 */
+    .hidden { display: none !important; }
+    .flex-center { display: flex; justify-content: center; align-items: center; }
+    .flex-col { display: flex; flex-direction: column; }
+    
+    /* 配置页面 */
+    #setup-page { min-height: 100vh; background: linear-gradient(135deg, #E3F2FD 0%, #F5F7FA 50%, #E8EAF6 100%); }
+    .setup-card { background: #fff; border-radius: 16px; padding: 40px; width: 90%; max-width: 420px; box-shadow: 0 8px 32px rgba(0,0,0,0.1); }
+    .setup-logo { width: 72px; height: 72px; border-radius: 16px; margin: 0 auto 16px; display: block; }
+    .setup-title { text-align: center; font-size: 22px; font-weight: 700; color: #1565C0; margin-bottom: 8px; }
+    .setup-subtitle { text-align: center; font-size: 13px; color: #999; margin-bottom: 28px; }
+    .form-group { margin-bottom: 20px; }
+    .form-label { display: block; font-size: 13px; color: #6B7280; margin-bottom: 6px; font-weight: 500; }
+    .form-input { width: 100%; padding: 12px 14px; border: 1.5px solid #E5E7EB; border-radius: 8px; font-size: 15px; transition: all 0.2s; background: #fff; }
+    .form-input:focus { outline: none; border-color: #1976D2; box-shadow: 0 0 0 3px rgba(25,118,210,0.1); }
+    .form-input.error { border-color: #ef4444; }
+    .btn { display: block; width: 100%; padding: 13px; border: none; border-radius: 10px; font-size: 16px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+    .btn-primary { background: linear-gradient(135deg, #1976D2, #1565C0); color: #fff; }
+    .btn-primary:hover { background: linear-gradient(135deg, #1565C0, #0D47A1); transform: translateY(-1px); }
+    .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+    .error-msg { color: #ef4444; font-size: 13px; margin-top: 8px; text-align: center; }
+    .success-msg { color: #22c55e; font-size: 13px; margin-top: 8px; text-align: center; }
+    .platform-tag { text-align: center; margin-top: 12px; }
+    .platform-tag span { display: inline-block; background: #E3F2FD; color: #1976D2; padding: 4px 12px; border-radius: 12px; font-size: 11px; }
+    
+    /* 登录页面 */
+    #login-page { min-height: 100vh; background: linear-gradient(135deg, #E3F2FD 0%, #F5F7FA 50%, #E8EAF6 100%); }
+    .login-card { background: #fff; border-radius: 16px; padding: 36px; width: 90%; max-width: 400px; box-shadow: 0 8px 32px rgba(0,0,0,0.1); }
+    .captcha-row { display: flex; gap: 10px; align-items: center; }
+    .captcha-input { flex: 1; }
+    .captcha-img { width: 120px; height: 44px; border-radius: 8px; cursor: pointer; border: 1.5px solid #E5E7EB; }
+    
+    /* 主页面 */
+    #main-page { min-height: 100vh; background: #f0f2f5; }
+    .app-header { background: #fff; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #E5E7EB; position: sticky; top: 0; z-index: 100; }
+    .app-header-title { font-size: 17px; font-weight: 700; color: #1565C0; }
+    .header-right { display: flex; align-items: center; gap: 12px; }
+    .header-btn { background: none; border: none; padding: 6px; cursor: pointer; color: #6B7280; font-size: 14px; }
+    
+    /* 底部导航 */
+    .tab-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; display: flex; border-top: 1px solid #E5E7EB; z-index: 100; padding-bottom: env(safe-area-inset-bottom); }
+    .tab-item { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 8px 0; cursor: pointer; color: #9CA3AF; transition: color 0.2s; font-size: 10px; }
+    .tab-item.active { color: #1976D2; }
+    .tab-icon { font-size: 22px; margin-bottom: 2px; }
+    
+    /* 内容区域 */
+    .page-content { padding: 16px; padding-bottom: 80px; }
+    
+    /* 卡片 */
+    .card { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .card-title { font-size: 15px; font-weight: 600; color: #1f2937; margin-bottom: 12px; }
+    
+    /* KPI */
+    .kpi-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px; }
+    .kpi-card { background: #fff; border-radius: 12px; padding: 16px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .kpi-value { font-size: 24px; font-weight: 700; color: #1976D2; }
+    .kpi-label { font-size: 12px; color: #9CA3AF; margin-top: 4px; }
+    
+    /* 列表 */
+    .list-item { display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid #F3F4F6; }
+    .list-item:last-child { border-bottom: none; }
+    .list-item-left { flex: 1; }
+    .list-item-title { font-size: 15px; font-weight: 500; color: #1f2937; }
+    .list-item-desc { font-size: 12px; color: #9CA3AF; margin-top: 2px; }
+    .list-item-right { text-align: right; }
+    .list-item-value { font-size: 15px; font-weight: 600; }
+    
+    /* 标签 */
+    .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+    .tag-blue { background: #E3F2FD; color: #1976D2; }
+    .tag-green { background: #E8F5E9; color: #2E7D32; }
+    .tag-orange { background: #FFF3E0; color: #E65100; }
+    .tag-red { background: #FFEBEE; color: #C62828; }
+    
+    /* 搜索 */
+    .search-bar { display: flex; gap: 8px; margin-bottom: 16px; }
+    .search-input { flex: 1; padding: 10px 14px; border: 1.5px solid #E5E7EB; border-radius: 8px; font-size: 14px; background: #fff; }
+    .search-input:focus { outline: none; border-color: #1976D2; }
+    .search-btn { padding: 10px 16px; background: #1976D2; color: #fff; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; }
+    
+    /* 加载 */
+    .loading { text-align: center; padding: 40px; color: #9CA3AF; }
+    .spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid #E5E7EB; border-top-color: #1976D2; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    
+    /* Toast */
+    .toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: #1f2937; color: #fff; padding: 10px 20px; border-radius: 8px; font-size: 14px; z-index: 9999; transition: opacity 0.3s; }
+    
+    /* 设置弹窗 */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 200; display: flex; align-items: flex-end; justify-content: center; }
+    .modal-content { background: #fff; border-radius: 16px 16px 0 0; padding: 24px; width: 100%; max-width: 500px; max-height: 80vh; overflow-y: auto; }
+    .modal-title { font-size: 18px; font-weight: 700; margin-bottom: 16px; }
+    .modal-close { position: absolute; right: 16px; top: 16px; background: none; border: none; font-size: 24px; cursor: pointer; color: #9CA3AF; }
+  </style>
+</head>
+<body>
+  <!-- ========== 配置页面 ========== -->
+  <div id="setup-page" class="flex-center">
+    <div class="setup-card">
+      <img src="logo.png" class="setup-logo" onerror="this.style.background='linear-gradient(135deg,#1976D2,#1565C0)'; this.style.display='flex';">
+      <div class="setup-title">云仓库存管理系统</div>
+      <div class="setup-subtitle">首次使用请配置服务器连接</div>
+      
+      <div class="form-group">
+        <label class="form-label">API 服务器地址</label>
+        <input type="url" id="setup-api-url" class="form-input" placeholder="https://warehouse.yuejiaxin.ln.cn" value="">
+      </div>
+      
+      <div class="form-group">
+        <label class="form-label">API Token</label>
+        <input type="text" id="setup-api-token" class="form-input" placeholder="请输入管理员提供的 API Token">
+      </div>
+      
+      <button id="setup-verify-btn" class="btn btn-primary" onclick="verifyAndSave()">验证连接</button>
+      <div id="setup-msg"></div>
+      
+      <div class="platform-tag">
+        <span id="platform-tag"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 登录页面 ========== -->
+  <div id="login-page" class="flex-center hidden">
+    <div class="login-card">
+      <img src="logo.png" class="setup-logo" onerror="this.style.background='linear-gradient(135deg,#1976D2,#1565C0)';">
+      <div class="setup-title">云仓库存管理系统</div>
+      <div class="setup-subtitle" id="login-server-info"></div>
+      
+      <div class="form-group">
+        <label class="form-label">用户名</label>
+        <input type="text" id="login-username" class="form-input" placeholder="请输入用户名" autocomplete="username">
+      </div>
+      
+      <div class="form-group">
+        <label class="form-label">密码</label>
+        <input type="password" id="login-password" class="form-input" placeholder="请输入密码" autocomplete="current-password">
+      </div>
+      
+      <div class="form-group">
+        <label class="form-label">图形验证码</label>
+        <div class="captcha-row">
+          <input type="text" id="login-captcha" class="form-input captcha-input" placeholder="请输入验证码" maxlength="4">
+          <canvas id="captcha-canvas" class="captcha-img" width="120" height="44" onclick="refreshCaptcha()"></canvas>
+        </div>
+      </div>
+      
+      <button id="login-btn" class="btn btn-primary" onclick="doLogin()">登 录</button>
+      <div id="login-msg"></div>
+      
+      <div style="text-align: center; margin-top: 16px;">
+        <a href="#" onclick="showSetup()" style="color: #1976D2; font-size: 13px; text-decoration: none;">修改服务器配置</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 主页面 ========== -->
+  <div id="main-page" class="hidden">
+    <!-- 顶部导航 -->
+    <div class="app-header">
+      <div class="app-header-title">云仓系统</div>
+      <div class="header-right">
+        <span id="header-platform" style="font-size: 11px; color: #9CA3AF;"></span>
+        <button class="header-btn" onclick="showSettings()">⚙️</button>
+        <button class="header-btn" onclick="doLogout()">🚪</button>
+      </div>
+    </div>
+    
+    <!-- Tab 内容区 -->
+    <div id="tab-dashboard" class="page-content">
+      <div class="kpi-grid" id="kpi-grid"></div>
+      <div class="card" id="warehouse-card">
+        <div class="card-title">仓库概览</div>
+        <div id="warehouse-list"></div>
+      </div>
+    </div>
+    
+    <div id="tab-inventory" class="page-content hidden">
+      <div class="search-bar">
+        <input type="text" id="inv-search" class="search-input" placeholder="搜索商品名称/编码">
+        <button class="search-btn" onclick="loadInventory()">搜索</button>
+      </div>
+      <div id="inventory-list"></div>
+    </div>
+    
+    <div id="tab-stock-in" class="page-content hidden">
+      <div class="search-bar">
+        <input type="text" id="si-search" class="search-input" placeholder="搜索单号/商品">
+        <button class="search-btn" onclick="loadStockIn()">搜索</button>
+      </div>
+      <div id="stock-in-list"></div>
+    </div>
+    
+    <div id="tab-logs" class="page-content hidden">
+      <div class="search-bar">
+        <select id="log-type" class="search-input" style="flex: 0.4;">
+          <option value="">全部</option>
+          <option value="system">系统日志</option>
+          <option value="operation">操作日志</option>
+          <option value="inventory">库存日志</option>
+        </select>
+        <input type="text" id="log-search" class="search-input" placeholder="搜索日志">
+        <button class="search-btn" onclick="loadLogs()">搜索</button>
+      </div>
+      <div id="logs-list"></div>
+    </div>
+    
+    <!-- 底部 Tab 栏 -->
+    <div class="tab-bar">
+      <div class="tab-item active" onclick="switchTab('dashboard')">
+        <div class="tab-icon">📊</div>
+        <div>工作台</div>
+      </div>
+      <div class="tab-item" onclick="switchTab('inventory')">
+        <div class="tab-icon">📦</div>
+        <div>库存</div>
+      </div>
+      <div class="tab-item" onclick="switchTab('stock-in')">
+        <div class="tab-icon">📥</div>
+        <div>入库</div>
+      </div>
+      <div class="tab-item" onclick="switchTab('logs')">
+        <div class="tab-icon">📋</div>
+        <div>日志</div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- 设置弹窗 -->
+  <div id="settings-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeSettings()">
+    <div class="modal-content" style="position: relative;">
+      <button class="modal-close" onclick="closeSettings()">×</button>
+      <div class="modal-title">设置</div>
+      <div class="form-group">
+        <label class="form-label">API 服务器</label>
+        <input type="text" id="settings-url" class="form-input" readonly>
+      </div>
+      <div class="form-group">
+        <label class="form-label">平台</label>
+        <input type="text" id="settings-platform" class="form-input" readonly>
+      </div>
+      <div class="form-group">
+        <label class="form-label">版本</label>
+        <input type="text" class="form-input" value="1.0.0" readonly>
+      </div>
+      <button class="btn btn-primary" style="background: #ef4444; margin-top: 12px;" onclick="doLogout()">退出登录</button>
+      <button class="btn" style="background: #F3F4F6; color: #6B7280; margin-top: 8px;" onclick="resetConfig()">重新配置服务器</button>
+    </div>
+  </div>
+  
+  <div id="toast" class="toast hidden"></div>
+
+  <script>
+    // ============ 全局状态 ============
+    let config = null;
+    let captchaText = '';
+    let currentTab = 'dashboard';
+    
+    // 平台检测
+    function detectPlatform() {
+      const ua = navigator.userAgent;
+      if (/HarmonyOS/.test(ua)) return '鸿蒙';
+      if (/iPhone|iPad/.test(ua)) return 'iOS';
+      if (/Android/.test(ua)) return 'Android';
+      if (/Mac/.test(ua)) return /Intel/.test(ua) ? 'macOS (Intel)' : 'macOS (Apple Silicon)';
+      if (/Win64|x64|WOW64/.test(ua)) return 'Windows 64位';
+      if (/Win/.test(ua)) return 'Windows 32位';
+      return 'Web';
+    }
+    
+    function showToast(msg, duration = 2000) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.remove('hidden');
+      setTimeout(() => t.classList.add('hidden'), duration);
+    }
+    
+    // ============ 初始化 ============
+    function init() {
+      const platform = detectPlatform();
+      document.getElementById('platform-tag').textContent = platform;
+      document.getElementById('header-platform').textContent = platform;
+      
+      // 加载配置
+      const saved = localStorage.getItem('app_config');
+      if (saved) {
+        config = JSON.parse(saved);
+        showLoginPage();
+      } else {
+        showSetupPage();
+      }
+    }
+    
+    // ============ 配置页面 ============
+    function showSetupPage() {
+      document.getElementById('setup-page').classList.remove('hidden');
+      document.getElementById('login-page').classList.add('hidden');
+      document.getElementById('main-page').classList.add('hidden');
+      if (config) {
+        document.getElementById('setup-api-url').value = config.apiBaseUrl || '';
+        document.getElementById('setup-api-token').value = config.apiToken || '';
+      }
+    }
+    
+    function showSetup() {
+      showSetupPage();
+    }
+    
+    async function verifyAndSave() {
+      const url = document.getElementById('setup-api-url').value.trim();
+      const token = document.getElementById('setup-api-token').value.trim();
+      const msg = document.getElementById('setup-msg');
+      const btn = document.getElementById('setup-verify-btn');
+      
+      if (!url) { msg.innerHTML = '<div class="error-msg">请输入API服务器地址</div>'; return; }
+      if (!token) { msg.innerHTML = '<div class="error-msg">请输入API Token</div>'; return; }
+      
+      btn.disabled = true;
+      btn.textContent = '验证中...';
+      msg.innerHTML = '';
+      
+      try {
+        // 验证 Token
+        const res = await fetch(`${url.replace(/\/+$/, '')}/api/settings/token`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+          config = { apiBaseUrl: url, apiToken: token, platform: detectPlatform() };
+          localStorage.setItem('app_config', JSON.stringify(config));
+          msg.innerHTML = '<div class="success-msg">✓ 验证成功，正在跳转...</div>';
+          setTimeout(() => showLoginPage(), 800);
+        } else {
+          msg.innerHTML = `<div class="error-msg">${data.error || '验证失败'}</div>`;
+        }
+      } catch (e) {
+        msg.innerHTML = `<div class="error-msg">连接失败：${e.message}</div>`;
+      }
+      
+      btn.disabled = false;
+      btn.textContent = '验证连接';
+    }
+    
+    // ============ 登录页面 ============
+    function showLoginPage() {
+      document.getElementById('setup-page').classList.add('hidden');
+      document.getElementById('login-page').classList.remove('hidden');
+      document.getElementById('main-page').classList.add('hidden');
+      document.getElementById('login-server-info').textContent = `服务器: ${config.apiBaseUrl}`;
+      refreshCaptcha();
+    }
+    
+    function drawCaptcha(text) {
+      const canvas = document.getElementById('captcha-canvas');
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#f0f0f0';
+      ctx.fillRect(0, 0, 120, 44);
+      
+      // 干扰线
+      for (let i = 0; i < 3; i++) {
+        ctx.strokeStyle = `hsl(${Math.random()*360}, 50%, 70%)`;
+        ctx.beginPath();
+        ctx.moveTo(Math.random()*120, Math.random()*44);
+        ctx.lineTo(Math.random()*120, Math.random()*44);
+        ctx.stroke();
+      }
+      
+      // 文字
+      ctx.font = 'bold 24px monospace';
+      for (let i = 0; i < text.length; i++) {
+        ctx.fillStyle = `hsl(${Math.random()*360}, 60%, 40%)`;
+        ctx.save();
+        ctx.translate(20 + i * 24, 30);
+        ctx.rotate((Math.random() - 0.5) * 0.4);
+        ctx.fillText(text[i], 0, 0);
+        ctx.restore();
+      }
+    }
+    
+    async function refreshCaptcha() {
+      try {
+        const res = await fetch(`${config.apiBaseUrl.replace(/\/+$/, '')}/api/auth/captcha?${Date.now()}`, {
+          headers: { 'X-API-Token': config.apiToken }
+        });
+        const data = await res.json();
+        if (data.success) {
+          captchaText = data.data.text;
+          drawCaptcha(captchaText);
+        }
+      } catch {
+        // 画一个默认验证码
+        captchaText = 'ABCD';
+        drawCaptcha(captchaText);
+      }
+    }
+    
+    async function doLogin() {
+      const username = document.getElementById('login-username').value.trim();
+      const password = document.getElementById('login-password').value;
+      const captcha = document.getElementById('login-captcha').value.trim();
+      const msg = document.getElementById('login-msg');
+      const btn = document.getElementById('login-btn');
+      
+      if (!username || !password) { msg.innerHTML = '<div class="error-msg">请输入用户名和密码</div>'; return; }
+      if (!captcha) { msg.innerHTML = '<div class="error-msg">请输入验证码</div>'; return; }
+      
+      btn.disabled = true;
+      btn.textContent = '登录中...';
+      msg.innerHTML = '';
+      
+      try {
+        // 1. 检查账号
+        const checkRes = await fetch(`${config.apiBaseUrl.replace(/\/+$/, '')}/api/auth/login-check`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-API-Token': config.apiToken },
+          body: JSON.stringify({ username, password }),
+        });
+        const checkData = await checkRes.json();
+        
+        if (!checkData.success) {
+          msg.innerHTML = `<div class="error-msg">${checkData.error}</div>`;
+          refreshCaptcha();
+          btn.disabled = false;
+          btn.textContent = '登 录';
+          return;
+        }
+        
+        // 2. 获取 CSRF
+        const csrfRes = await fetch(`${config.apiBaseUrl.replace(/\/+$/, '')}/api/auth/csrf`, {
+          headers: { 'X-API-Token': config.apiToken }
+        });
+        const csrfData = await csrfRes.json();
+        
+        // 3. 登录
+        const loginBody = new URLSearchParams({
+          username, password, csrfToken: csrfData.csrfToken
+        });
+        
+        const loginRes = await fetch(`${config.apiBaseUrl.replace(/\/+$/, '')}/api/auth/callback/credentials`, {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-API-Token': config.apiToken,
+          },
+          body: loginBody,
+          credentials: 'include',
+        });
+        
+        // 保存登录态
+        localStorage.setItem('login_user', username);
+        showToast('登录成功');
+        setTimeout(() => showMainPage(), 500);
+        
+      } catch (e) {
+        msg.innerHTML = `<div class="error-msg">登录失败：${e.message}</div>`;
+      }
+      
+      btn.disabled = false;
+      btn.textContent = '登 录';
+    }
+    
+    function doLogout() {
+      localStorage.removeItem('login_user');
+      showLoginPage();
+      showToast('已退出登录');
+    }
+    
+    function resetConfig() {
+      localStorage.removeItem('app_config');
+      localStorage.removeItem('login_user');
+      config = null;
+      showSetupPage();
+    }
+    
+    // ============ 主页面 ============
+    async function showMainPage() {
+      document.getElementById('setup-page').classList.add('hidden');
+      document.getElementById('login-page').classList.add('hidden');
+      document.getElementById('main-page').classList.remove('hidden');
+      loadDashboard();
+    }
+    
+    function switchTab(tab) {
+      currentTab = tab;
+      document.querySelectorAll('.page-content').forEach(el => el.classList.add('hidden'));
+      document.getElementById(`tab-${tab}`).classList.remove('hidden');
+      document.querySelectorAll('.tab-item').forEach(el => el.classList.remove('active'));
+      event.currentTarget.classList.add('active');
+      
+      if (tab === 'dashboard') loadDashboard();
+      else if (tab === 'inventory') loadInventory();
+      else if (tab === 'stock-in') loadStockIn();
+      else if (tab === 'logs') loadLogs();
+    }
+    
+    async function apiRequest(path, options = {}) {
+      const url = `${config.apiBaseUrl.replace(/\/+$/, '')}${path}`;
+      const headers = {
+        'Content-Type': 'application/json',
+        'X-API-Token': config.apiToken,
+        'X-Client-Platform': config.platform || detectPlatform(),
+        ...options.headers,
+      };
+      const res = await fetch(url, { ...options, headers, credentials: 'include' });
+      return res.json();
+    }
+    
+    async function loadDashboard() {
+      try {
+        const [invRes, whRes] = await Promise.all([
+          apiRequest('/api/inventory?page=1&pageSize=1'),
+          apiRequest('/api/warehouse'),
+        ]);
+        
+        const totalQty = invRes.data?.items?.reduce((s, i) => s + Number(i.onHand || 0), 0) || 0;
+        const totalItems = invRes.data?.total || 0;
+        
+        document.getElementById('kpi-grid').innerHTML = `
+          <div class="kpi-card"><div class="kpi-value">${totalItems}</div><div class="kpi-label">商品种类</div></div>
+          <div class="kpi-card"><div class="kpi-value">${totalQty}</div><div class="kpi-label">总库存</div></div>
+        `;
+        
+        const warehouses = whRes.data || [];
+        document.getElementById('warehouse-list').innerHTML = warehouses.length === 0 
+          ? '<div style="text-align:center;color:#999;padding:20px;">暂无仓库</div>'
+          : warehouses.map(w => `
+            <div class="list-item">
+              <div class="list-item-left">
+                <div class="list-item-title">${w.name}</div>
+                <div class="list-item-desc">${w.code || ''} ${w.address || ''}</div>
+              </div>
+              <div class="list-item-right">
+                <span class="tag tag-blue">${w.status === 1 ? '启用' : '停用'}</span>
+              </div>
+            </div>
+          `).join('');
+      } catch (e) {
+        document.getElementById('kpi-grid').innerHTML = '<div class="loading">加载失败</div>';
+      }
+    }
+    
+    async function loadInventory() {
+      const keyword = document.getElementById('inv-search').value;
+      const list = document.getElementById('inventory-list');
+      list.innerHTML = '<div class="loading"><div class="spinner"></div> 加载中...</div>';
+      
+      try {
+        const data = await apiRequest(`/api/inventory?page=1&pageSize=50&keyword=${encodeURIComponent(keyword)}`);
+        const items = data.data?.items || [];
+        
+        if (items.length === 0) {
+          list.innerHTML = '<div class="loading">暂无库存数据</div>';
+          return;
+        }
+        
+        list.innerHTML = items.map(item => `
+          <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div>
+                <div style="font-weight:600;font-size:15px;">${item.productName || '-'}</div>
+                <div style="font-size:12px;color:#9CA3AF;margin-top:4px;">${item.productCode || ''} | ${item.warehouseName || ''}</div>
+              </div>
+              <div style="text-align:right;">
+                <div style="font-size:20px;font-weight:700;color:#1976D2;">${Number(item.onHand || 0)}</div>
+                <div style="font-size:11px;color:#9CA3AF;">可用: ${Number(item.available || 0)}</div>
+              </div>
+            </div>
+          </div>
+        `).join('');
+      } catch (e) {
+        list.innerHTML = '<div class="loading">加载失败</div>';
+      }
+    }
+    
+    async function loadStockIn() {
+      const list = document.getElementById('stock-in-list');
+      list.innerHTML = '<div class="loading"><div class="spinner"></div> 加载中...</div>';
+      
+      try {
+        const data = await apiRequest('/api/stock-in?page=1&pageSize=20');
+        const items = data.data?.items || [];
+        
+        if (items.length === 0) {
+          list.innerHTML = '<div class="loading">暂无入库单</div>';
+          return;
+        }
+        
+        list.innerHTML = items.map(item => `
+          <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div>
+                <div style="font-weight:600;">${item.orderNo || '-'}</div>
+                <div style="font-size:12px;color:#9CA3AF;margin-top:4px;">${item.warehouseName || ''} | ${item.supplierName || ''}</div>
+              </div>
+              <span class="tag ${item.status==='COMPLETED'?'tag-green':item.status==='DRAFT'?'tag-orange':'tag-blue'}">${item.status==='DRAFT'?'草稿':item.status==='COMPLETED'?'已完成':item.status}</span>
+            </div>
+          </div>
+        `).join('');
+      } catch (e) {
+        list.innerHTML = '<div class="loading">加载失败</div>';
+      }
+    }
+    
+    async function loadLogs() {
+      const type = document.getElementById('log-type').value;
+      const keyword = document.getElementById('log-search').value;
+      const list = document.getElementById('logs-list');
+      list.innerHTML = '<div class="loading"><div class="spinner"></div> 加载中...</div>';
+      
+      try {
+        const data = await apiRequest(`/api/logs?type=${type}&page=1&pageSize=50&keyword=${encodeURIComponent(keyword)}`);
+        const items = data.data?.items || [];
+        
+        if (items.length === 0) {
+          list.innerHTML = '<div class="loading">暂无日志</div>';
+          return;
+        }
+        
+        const moduleMap = { system:'系统',auth:'登录',user:'用户',product:'商品',warehouse:'仓库','stock-in':'入库','stock-out':'出库',transfer:'调拨',stocktake:'盘点',inventory:'库存' };
+        const actionMap = { create:'新建',update:'编辑',delete:'删除',login:'登录',logout:'登出',post:'过账' };
+        
+        list.innerHTML = items.map(item => `
+          <div class="card" style="padding:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div>
+                <span class="tag tag-blue" style="margin-right:6px;">${moduleMap[item.module]||item.module}</span>
+                <span style="font-size:13px;">${actionMap[item.action]||item.action}</span>
+              </div>
+              <div style="font-size:11px;color:#9CA3AF;">${new Date(item.createdAt).toLocaleString('zh-CN')}</div>
+            </div>
+            <div style="font-size:13px;color:#6B7280;margin-top:6px;">${item.content || '-'}</div>
+            <div style="font-size:11px;color:#9CA3AF;margin-top:4px;">${item.user?.realName || item.user?.username || ''} | ${item.ip || ''}</div>
+          </div>
+        `).join('');
+      } catch (e) {
+        list.innerHTML = '<div class="loading">加载失败</div>';
+      }
+    }
+    
+    // ============ 设置 ============
+    function showSettings() {
+      document.getElementById('settings-url').value = config?.apiBaseUrl || '';
+      document.getElementById('settings-platform').value = config?.platform || detectPlatform();
+      document.getElementById('settings-modal').classList.remove('hidden');
+    }
+    
+    function closeSettings() {
+      document.getElementById('settings-modal').classList.add('hidden');
+    }
+    
+    // ============ 启动 ============
+    init();
+  </script>
+</body>
+</html>

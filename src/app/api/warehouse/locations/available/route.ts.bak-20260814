@@ -1,0 +1,135 @@
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { serializeBigInt } from "@/lib/serialize";
+
+// 每个货位最多存放的盒子数（每个盒子1件商品）
+const MAX_BOXES_PER_LOCATION = 10;
+
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const warehouseId = searchParams.get("warehouseId");
+    const quantity = parseInt(searchParams.get("quantity") || "1");
+
+    if (!warehouseId) {
+      return NextResponse.json(
+        serializeBigInt({ success: false, error: "缺少仓库ID" }),
+        { status: 400 }
+      );
+    }
+
+    // 获取该仓库的所有区域
+    const zones = await prisma.zone.findMany({
+      where: { warehouseId: BigInt(warehouseId) },
+      orderBy: { code: "asc" },
+      include: {
+        locations: true,
+      },
+    });
+
+    // 对每个区域的货位进行自然排序（A-1-1, A-1-2, ..., A-1-10）
+    for (const zone of zones) {
+      zone.locations.sort((a: any, b: any) => {
+        const partsA = a.code.split('-').map(Number);
+        const partsB = b.code.split('-').map(Number);
+        for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
+          const numA = partsA[i] || 0;
+          const numB = partsB[i] || 0;
+          if (numA !== numB) return numA - numB;
+        }
+        return 0;
+      });
+    }
+
+    // 获取该仓库的所有库存记录（按货位分组）
+    const inventories = await prisma.inventory.findMany({
+      where: { 
+        warehouseId: BigInt(warehouseId),
+        locationId: { not: null },
+      },
+      select: {
+        locationId: true,
+        onHand: true,
+      },
+    });
+
+    // 统计每个货位的已用盒子数
+    const locationUsage: Record<string, number> = {};
+    for (const inv of inventories) {
+      const locId = inv.locationId?.toString();
+      if (locId) {
+        locationUsage[locId] = (locationUsage[locId] || 0) + Number(inv.onHand || 0);
+      }
+    }
+
+    // 构建可用货位列表（按顺序排列）
+    const availableLocations: {
+      id: string;
+      code: string;
+      name: string;
+      zoneCode: string;
+      zoneName: string;
+      used: number;
+      available: number;
+      full: boolean;
+    }[] = [];
+
+    for (const zone of zones) {
+      for (const location of zone.locations) {
+        const locId = location.id.toString();
+        const used = locationUsage[locId] || 0;
+        const available = MAX_BOXES_PER_LOCATION - used;
+        
+        // 只返回有空位的货位
+        if (available > 0) {
+          availableLocations.push({
+            id: locId,
+            code: location.code,
+            name: location.name,
+            zoneCode: zone.code,
+            zoneName: zone.name,
+            used,
+            available,
+            full: false,
+          });
+        }
+      }
+    }
+
+    // 计算需要多少个货位
+    const totalAvailable = availableLocations.reduce((sum, loc) => sum + loc.available, 0);
+    const canFit = totalAvailable >= quantity;
+    
+    // 生成分配信息
+    let assignInfo = '';
+    if (canFit) {
+      const locationsNeeded = [];
+      let remaining = quantity;
+      for (const loc of availableLocations) {
+        if (remaining <= 0) break;
+        const assign = Math.min(remaining, loc.available);
+        locationsNeeded.push(`${loc.code}(${assign}件)`);
+        remaining -= assign;
+      }
+      assignInfo = `将分配到 ${locationsNeeded.length} 个货位: ${locationsNeeded.join(' → ')}`;
+    } else {
+      assignInfo = `库存不足! 需要 ${quantity} 件，但只有 ${totalAvailable} 个空位`;
+    }
+
+    return NextResponse.json(
+      serializeBigInt({
+        success: true,
+        data: availableLocations,
+        totalAvailable,
+        canFit,
+        assignInfo,
+      })
+    );
+  } catch (error: any) {
+    console.error("Available locations API error:", error);
+    return NextResponse.json(
+      serializeBigInt({ success: false, error: error.message }),
+      { status: 500 }
+    );
+  }
+}

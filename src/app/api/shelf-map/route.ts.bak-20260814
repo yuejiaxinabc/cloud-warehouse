@@ -1,0 +1,118 @@
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { serializeBigInt } from "@/lib/serialize";
+
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const warehouseId = searchParams.get("warehouseId");
+
+    if (!warehouseId) {
+      return NextResponse.json(
+        serializeBigInt({ success: false, error: "缺少仓库ID" }),
+        { status: 400 }
+      );
+    }
+
+    // 获取仓库信息
+    const warehouse = await prisma.warehouse.findUnique({
+      where: { id: BigInt(warehouseId) },
+    });
+
+    if (!warehouse) {
+      return NextResponse.json(
+        serializeBigInt({ success: false, error: "仓库不存在" }),
+        { status: 404 }
+      );
+    }
+
+    // 获取该仓库的所有区域
+    const zones = await prisma.zone.findMany({
+      where: { warehouseId: BigInt(warehouseId) },
+      include: {
+        locations: true,
+      },
+    });
+
+    // 获取该仓库的库存信息（包含商品和库位）
+    const inventories = await prisma.inventory.findMany({
+      where: { warehouseId: BigInt(warehouseId) },
+      include: {
+        product: true,
+      },
+    });
+
+    // 构建库位数据
+    const locationData: any[] = [];
+
+    // 遍历区域和库位
+    for (const zone of zones) {
+      for (const location of zone.locations) {
+        // 查找该库位的库存
+        const inventory = inventories.find(
+          (inv: any) => inv.locationId && inv.locationId.toString() === location.id.toString()
+        );
+
+        locationData.push({
+          id: location.id.toString(),
+          code: location.code,
+          name: location.name,
+          zoneCode: zone.code,
+          zoneName: zone.name,
+          type: location.type,
+          capacity: location.capacity ? Number(location.capacity) : null,
+          quantity: inventory ? Number(inventory.onHand) : 0,
+          productName: inventory?.product?.name || null,
+          productCode: inventory?.product?.code || null,
+          productId: inventory?.productId?.toString() || null,
+        });
+      }
+    }
+
+    // 如果没有库位数据，尝试从库存记录中构建
+    if (locationData.length === 0 && inventories.length > 0) {
+      // 按商品分组统计
+      for (const inv of inventories) {
+        if (Number(inv.onHand) > 0) {
+          locationData.push({
+            id: inv.id.toString(),
+            code: `A-${Math.floor(Math.random() * 10) + 1}-${Math.floor(Math.random() * 10) + 1}-${Math.floor(Math.random() * 10) + 1}`,
+            name: `默认库位`,
+            zoneCode: "A",
+            zoneName: "A区",
+            type: "rack",
+            capacity: 100,
+            quantity: Number(inv.onHand),
+            productName: inv.product?.name || null,
+            productCode: inv.product?.code || null,
+            productId: inv.productId?.toString() || null,
+          });
+        }
+      }
+    }
+
+    return NextResponse.json(
+      serializeBigInt({
+        success: true,
+        data: locationData,
+        warehouse: {
+          id: warehouse.id.toString(),
+          name: warehouse.name,
+          code: warehouse.code,
+        },
+        zones: zones.map((z: any) => ({
+          id: z.id.toString(),
+          name: z.name,
+          code: z.code,
+          locationCount: z.locations.length,
+        })),
+      })
+    );
+  } catch (error: any) {
+    console.error("Shelf map API error:", error);
+    return NextResponse.json(
+      serializeBigInt({ success: false, error: error.message }),
+      { status: 500 }
+    );
+  }
+}
