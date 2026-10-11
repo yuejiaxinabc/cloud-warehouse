@@ -16,9 +16,17 @@ function addSecurityHeaders(response: NextResponse): NextResponse {
 const rateLimitStore = new Map<string, { count: number; resetTime: number }>();
 
 function getRateLimitKey(req: NextRequest, prefix: string): string {
+  // 优先信任 nginx 设置的 X-Real-IP（$remote_addr，不可伪造）；
+  // 其次取 X-Forwarded-For 的【最后一段】（nginx 用 $proxy_add_x_forwarded_for 把真实 IP 追加在末尾，
+  // 第一段是客户端可伪造的——旧实现取第一段导致限流可被 XFF 伪造绕过，FIX-2026-1004）
+  const realIp = req.headers.get('x-real-ip');
+  if (realIp) return `${prefix}:${realIp.trim()}`;
   const forwarded = req.headers.get('x-forwarded-for');
-  const ip = forwarded ? forwarded.split(',')[0].trim() : 'unknown';
-  return `${prefix}:${ip}`;
+  if (forwarded) {
+    const parts = forwarded.split(',').map(s => s.trim()).filter(Boolean);
+    if (parts.length) return `${prefix}:${parts[parts.length - 1]}`;
+  }
+  return `${prefix}:unknown`;
 }
 
 function checkRateLimit(key: string, maxRequests: number, windowMs: number): boolean {
@@ -47,11 +55,11 @@ const ALLOWED_ORIGINS = [
   process.env.NEXTAUTH_URL || '',
   process.env.NEXT_PUBLIC_APP_URL || '',
   'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  // 仅保留 HTTPS 来源；http 明文条目已移除（线上 80 端口一律 301 到 https），FIX-2026-1006
   'https://warehouse.yuejiaxin.ln.cn',
-  'http://warehouse.yuejiaxin.ln.cn',
-  // 微信小程序（开发者工具与真机请求会带 servicewechat.com 来源）
+  // 微信小程序（真机/开发者工具请求会带 servicewechat.com 来源）
   'https://servicewechat.com',
-  'http://servicewechat.com',
 ].filter(Boolean);
 
 // 公开 API（不需要登录）
@@ -128,11 +136,15 @@ export async function middleware(request: NextRequest) {
     if (token) {
 return addSecurityHeaders(NextResponse.next());
     }
-    const authHeader = request.headers.get("authorization");
-    const apiToken = request.headers.get("x-api-token");
-    const queryToken = new URL(request.url).searchParams.get("token");
-    if ((authHeader && authHeader.startsWith("Bearer ")) || apiToken || queryToken) {
-return addSecurityHeaders(NextResponse.next());
+    // 开放接口通道：/api/v1/* 的路由内部自带真实 token 校验
+    // （validateApiToken / requireMpToken，Node 运行时），middleware 放行到路由层；
+    // 其余路径一律只认 NextAuth 会话，绝不因携带 token 头而放行（FIX-2026-1001）。
+    const hasTokenHeader =
+      request.headers.get("authorization")?.startsWith("Bearer ") ||
+      !!request.headers.get("x-api-token") ||
+      !!new URL(request.url).searchParams.get("token");
+    if (hasTokenHeader && pathname.startsWith("/api/v1/")) {
+      return addSecurityHeaders(NextResponse.next());
     }
     return addSecurityHeaders(NextResponse.json({ success: false, error: "请先登录" }, { status: 401 }));
   }

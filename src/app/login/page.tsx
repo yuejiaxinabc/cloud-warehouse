@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { Form, Input, Button, message, Typography, Spin } from "antd";
@@ -11,77 +11,16 @@ import {
 import Link from "next/link";
 
 const { Text } = Typography;
-
-// 验证码字符集（纯大写，避免大小写争议）
-const CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-
-function genCaptchaText(len = 4) {
-  let text = "";
-  for (let i = 0; i < len; i++) text += CHARS[Math.floor(Math.random() * CHARS.length)];
-  return text;
-}
-
-function drawCaptcha(canvas: HTMLCanvasElement, text: string) {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  const w = canvas.width;
-  const h = canvas.height;
-  ctx.clearRect(0, 0, w, h);
-
-  // 浅蓝渐变背景（与系统主色一致）
-  const grad = ctx.createLinearGradient(0, 0, w, h);
-  grad.addColorStop(0, "#F0F5FF");
-  grad.addColorStop(1, "#E6F0FF");
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, w, h);
-
-  // 干扰线
-  for (let i = 0; i < 4; i++) {
-    ctx.strokeStyle = `rgba(${180 + i * 15},${200 + i * 10},${230},0.3)`;
-    ctx.lineWidth = 0.8;
-    ctx.beginPath();
-    ctx.moveTo(Math.random() * w, Math.random() * h);
-    ctx.bezierCurveTo(Math.random() * w, Math.random() * h, Math.random() * w, Math.random() * h, Math.random() * w, Math.random() * h);
-    ctx.stroke();
-  }
-
-  // 干扰点
-  for (let i = 0; i < 15; i++) {
-    ctx.fillStyle = `rgba(${150 + Math.random() * 80},${170 + Math.random() * 60},${220},0.35)`;
-    ctx.beginPath();
-    ctx.arc(Math.random() * w, Math.random() * h, 1, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // 文字
-  const fontSize = Math.floor(h * 0.5);
-  ctx.font = `bold ${fontSize}px "Courier New", monospace`;
-  const totalW = ctx.measureText(text).width;
-  const startX = (w - totalW) / 2;
-  const colors = ["#1677FF", "#4096FF", "#1677FF", "#4096FF"];
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    const chW = ctx.measureText(ch).width;
-    const x = startX + (i === 0 ? 0 : ctx.measureText(text.slice(0, i)).width);
-    const y = Math.floor(h * 0.65) + Math.floor(Math.random() * 4 - 2);
-    const rot = (Math.random() - 0.5) * 0.15;
-    ctx.save();
-    ctx.translate(x + chW / 2, y);
-    ctx.rotate(rot);
-    ctx.fillStyle = colors[i % colors.length];
-    ctx.fillText(ch, -chW / 2, 0);
-    ctx.restore();
-  }
-}
+// 验证码改为服务端生成 SVG + 服务端一次性校验（FIX-2026-1002），本地生成/绘制逻辑已移除
 
 export default function LoginPage() {
   const [loading, setLoading] = useState(false);
-  const [captcha, setCaptcha] = useState("");
+  const [captchaToken, setCaptchaToken] = useState("");
+  const [captchaSvg, setCaptchaSvg] = useState("");
   const [captchaInput, setCaptchaInput] = useState("");
   const [systemInfo, setSystemInfo] = useState({ companyName: "云仓智能仓储管理平台", contactPhone: "" });
   const [fadeIn, setFadeIn] = useState(false);
   const [agreed, setAgreed] = useState(false);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const router = useRouter();
 
   useEffect(() => { setTimeout(() => setFadeIn(true), 50); }, []);
@@ -101,14 +40,16 @@ export default function LoginPage() {
   }, []);
 
   const refreshCaptcha = useCallback(async () => {
-    const text = genCaptchaText();
-    const canvas = canvasRef.current;
-    if (canvas) drawCaptcha(canvas, text);
+    setCaptchaInput("");
     try {
       const res = await fetch("/api/auth/captcha?" + Date.now(), { cache: "no-store" });
       const data = await res.json();
-      setCaptcha(text);
-    } catch { setCaptcha(text); }
+      setCaptchaToken(data.token || "");
+      setCaptchaSvg(data.svg || "");
+    } catch {
+      setCaptchaToken("");
+      setCaptchaSvg("");
+    }
   }, []);
 
   useEffect(() => { refreshCaptcha(); }, [refreshCaptcha]);
@@ -116,15 +57,22 @@ export default function LoginPage() {
   const onFinish = async (values: { username: string; password: string }) => {
     if (!agreed) { message.warning("请先阅读并同意服务协议和隐私政策"); return; }
     if (!captchaInput.trim()) { message.warning("请输入验证码"); return; }
-    if (captchaInput.trim().toUpperCase() !== captcha.toUpperCase()) {
-      message.error("验证码错误，请重新输入");
-      setCaptchaInput("");
-      refreshCaptcha();
-      return;
-    }
 
     setLoading(true);
     try {
+      // 服务端一次性校验验证码（FIX-2026-1002）：通过后才执行登录
+      const capRes = await fetch("/api/auth/captcha", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: captchaToken, answer: captchaInput.trim() }),
+      });
+      const capData = await capRes.json().catch(() => ({ success: false, error: "验证码校验失败" }));
+      if (!capData.success) {
+        message.error(capData.error || "验证码错误，请重新输入");
+        refreshCaptcha();
+        return;
+      }
+
       const result = await signIn("credentials", {
         username: values.username.trim(),
         password: values.password,
@@ -132,15 +80,9 @@ export default function LoginPage() {
       });
 
       if (result?.error) {
-        try {
-          const chk = await fetch("/api/auth/login-check", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username: values.username.trim(), password: values.password }),
-          });
-          const chkData = await chk.json();
-          message.error(chkData.error || "用户名或密码错误");
-        } catch { message.error("网络异常，请检查网络连接"); }
+        // 统一错误文案，避免用户名枚举（FIX-2026-1003）
+        message.error("账号或密码错误");
+        refreshCaptcha();
       } else {
         message.success("登录成功");
         router.push("/");
@@ -273,7 +215,15 @@ export default function LoginPage() {
                   }}
                   title="点击刷新"
                 >
-                  <canvas ref={canvasRef} width={120} height={44} style={{ display: "block" }} />
+                  {captchaSvg ? (
+                    <img
+                      src={`data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(captchaSvg)))}`}
+                      alt="验证码"
+                      style={{ display: "block", width: 120, height: 44 }}
+                    />
+                  ) : (
+                    <span style={{ width: 120, height: 44, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#94A3B8" }}>加载中…</span>
+                  )}
                 </div>
               </div>
               <p style={{ margin: "5px 0 0", fontSize: 12, color: "#64748B" }}>

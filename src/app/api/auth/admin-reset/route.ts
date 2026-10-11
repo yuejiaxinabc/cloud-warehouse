@@ -66,14 +66,11 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: false, error: "新密码至少8位" }, { status: 400 });
       }
 
-      // 查找用户
+      // 查找用户（不存在与后续令牌错误返回同一文案，避免用户名枚举，FIX-2026-1003）
       const user = await prisma.user.findFirst({
         where: { username: username.trim(), status: 1 },
         select: { id: true },
       });
-      if (!user) {
-        return NextResponse.json({ success: false, error: "用户名不存在" }, { status: 400 });
-      }
 
       // 查全局令牌
       const config = await prisma.systemConfig.findFirst({
@@ -83,10 +80,10 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: false, error: "系统未设置重置令牌，请联系管理员" }, { status: 400 });
       }
 
-      // 验证令牌
+      // 验证令牌（用户不存在时仍执行一次 compare，保证响应时间一致，防时序枚举）
       const valid = await compare(token, config.value);
-      if (!valid) {
-        return NextResponse.json({ success: false, error: "重置令牌错误" }, { status: 400 });
+      if (!user || !valid) {
+        return NextResponse.json({ success: false, error: "用户名或重置令牌错误" }, { status: 400 });
       }
 
       // 重置密码

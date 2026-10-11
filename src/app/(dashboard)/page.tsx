@@ -131,9 +131,9 @@ export default function DashboardPage() {
 
   const alertColumns = [
     { title: "商品", dataIndex: "productName", key: "productName", render: (_: any, r: any) => r.product?.name || r.productName || "-" },
-    { title: "类型", dataIndex: "type", key: "type", width: 80, render: (t: string) => <Tag>{t === "LOW_STOCK" ? "低库存" : t === "HIGH_STOCK" ? "高库存" : t === "EXPIRING" ? "临期" : t}</Tag> },
+    { title: "类型", dataIndex: "title", key: "title", width: 90, render: (t: string) => <Tag>{t}</Tag> },
     { title: "级别", dataIndex: "level", key: "level", width: 80, render: (l: string) => <Tag color={l === "CRITICAL" ? "red" : l === "WARNING" ? "orange" : "blue"}>{l === "CRITICAL" ? "严重" : l === "WARNING" ? "警告" : "提示"}</Tag> },
-    { title: "信息", dataIndex: "message", key: "message", ellipsis: true },
+    { title: "信息", dataIndex: "content", key: "content", ellipsis: true },
     { title: "时间", dataIndex: "createdAt", key: "createdAt", width: 140, render: (v: string) => v ? new Date(v).toLocaleString() : "-" },
   ];
 

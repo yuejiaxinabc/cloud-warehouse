@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAuth, authErrorResponse } from '@/lib/auth-guard';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 
 const STATUS_TEXT: Record<string, string> = {
   PENDING: '待采购',
@@ -61,24 +61,24 @@ export async function POST(req: NextRequest) {
       r.remark || '',
     ]);
 
-    const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
-    ws['!cols'] = [
-      { wch: 18 }, { wch: 22 }, { wch: 16 }, { wch: 8 }, { wch: 8 }, { wch: 8 },
-      { wch: 10 }, { wch: 10 }, { wch: 20 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 24 },
-    ];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, '购买申请单');
+    // exceljs 生成工作簿（替代存在已知漏洞的 xlsx 包，FIX-2026-1005）
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('购买申请单');
+    const colWidths = [18, 22, 16, 8, 8, 8, 10, 10, 20, 14, 12, 12, 10, 24];
+    ws.columns = header.map((h, i) => ({ header: h, key: `c${i}`, width: colWidths[i] }));
+    ws.getRow(1).font = { bold: true };
+    for (const row of rows) ws.addRow(row);
 
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+    const buf = await wb.xlsx.writeBuffer();
     const filename = `购买申请单_${requests.length}条_${new Date().toISOString().slice(0, 10)}.xlsx`;
     const encoded = encodeURIComponent(filename);
 
-    return new NextResponse(new Uint8Array(buf), {
+    return new NextResponse(new Uint8Array(buf as ArrayBuffer), {
       status: 200,
       headers: {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'Content-Disposition': `attachment; filename="purchase_requests.xlsx"; filename*=UTF-8''${encoded}`,
-        'Content-Length': String(buf.length),
+        'Content-Length': String((buf as ArrayBuffer).byteLength),
       },
     });
   } catch (error: any) {
