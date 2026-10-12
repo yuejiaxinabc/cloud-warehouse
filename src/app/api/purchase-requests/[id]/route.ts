@@ -4,11 +4,11 @@ import { serializeBigInt } from '@/lib/serialize';
 import { requireAuth, authErrorResponse } from '@/lib/auth-guard';
 
 // GET - 申请详情（所有登录用户）
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     await requireAuth();
     const request = await prisma.purchaseRequest.findUnique({
-      where: { id: BigInt(params.id) },
+      where: { id: BigInt((await params).id) },
       include: {
         warehouse: { select: { id: true, name: true, code: true } },
         location: { select: { id: true, name: true, code: true } },
@@ -26,10 +26,10 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 }
 
 // PATCH - 修改申请 / 状态流转（所有登录用户）
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     await requireAuth();
-    const id = BigInt(params.id);
+    const id = BigInt((await params).id);
     const body = await req.json();
     const existing = await prisma.purchaseRequest.findUnique({ where: { id } });
     if (!existing) {
@@ -86,10 +86,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 }
 
 // DELETE - 删除申请（所有登录用户，任何状态可删）
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     await requireAuth();
-    const id = BigInt(params.id);
+    const id = BigInt((await params).id);
     const existing = await prisma.purchaseRequest.findUnique({ where: { id } });
     if (!existing) {
       return NextResponse.json({ success: false, error: '申请不存在' }, { status: 404 });

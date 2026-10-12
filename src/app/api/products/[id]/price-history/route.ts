@@ -5,11 +5,11 @@ import { serializeBigInt } from '@/lib/serialize';
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   await requireAuth(req);
   try {
-    const productId = parseInt(params.id);
+    const productId = parseInt((await params).id);
 
     // 批次价格
     const lots = await prisma.inventoryLot.findMany({

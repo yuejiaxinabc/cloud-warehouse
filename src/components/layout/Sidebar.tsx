@@ -11,7 +11,7 @@ import {
   BarChartOutlined, SettingOutlined, UserOutlined, BellOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, LogoutOutlined,
   QrcodeOutlined, TagsOutlined, FileExcelOutlined, ClusterOutlined,
-  DollarOutlined, ScanOutlined, FileTextOutlined,
+  DollarOutlined, ScanOutlined, FileTextOutlined, SafetyOutlined,
   ShopOutlined, TeamOutlined, MenuOutlined, AppstoreOutlined, ShoppingCartOutlined,
 } from "@ant-design/icons";
 
@@ -42,6 +42,7 @@ const menuItems: MenuProps["items"] = [
   { key: "/cost", icon: <DollarOutlined />, label: "成本核算" },
   { key: "/logs", icon: <FileTextOutlined />, label: "操作日志" },
   { key: "/settings", icon: <SettingOutlined />, label: "系统设置" },
+  { key: "/settings/backup", icon: <SafetyOutlined />, label: "数据备份" },
 ];
 
 interface AlertItem {
@@ -101,8 +102,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   const getSelectedKey = () => {
     if (pathname === "/") return "/";
-    const match = pathname.match(/^\/[^\/]+/);
-    return match ? match[0] : "/";
+    // 选择最长匹配的路径前缀，确保 /settings/backup 高亮“数据备份”而非“系统设置”
+    const matched = (menuItems || [])
+      .map((it: any) => it?.key as string)
+      .filter((k) => k && (pathname === k || pathname.startsWith(k + "/")))
+      .sort((a, b) => b.length - a.length);
+    return matched[0] || pathname.match(/^\/[^\/]+/)?.[0] || "/";
   };
 
   const handleMenuClick = (key: string) => {

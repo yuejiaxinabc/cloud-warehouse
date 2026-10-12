@@ -12,7 +12,7 @@ export async function logOperation(params: {
 }): Promise<void> {
   try {
     const session = await getServerSession();
-    const headersList = headers();
+    const headersList = await headers();
     const ip = headersList.get('x-forwarded-for') || headersList.get('x-real-ip') || 'unknown';
     const ua = headersList.get('user-agent') || '';
     

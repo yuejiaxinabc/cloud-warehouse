@@ -5,11 +5,11 @@ import { serializeBigInt } from '@/lib/serialize';
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   await requireAuth(req);
   try {
-    const id = Number(params.id);
+    const id = Number((await params).id);
     const order = await prisma.inboundOrder.findUnique({
       where: { id },
       include: {

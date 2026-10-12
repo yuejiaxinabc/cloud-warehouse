@@ -18,13 +18,13 @@ const updateRoleSchema = z.object({
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
     if (!session) return errorResponse('请先登录', 401);
 
-    const { id } = idSchema.parse({ id: params.id });
+    const { id } = idSchema.parse({ id: (await params).id });
     const role = await prisma.role.findUnique({
       where: { id },
       include: {
@@ -55,7 +55,7 @@ export async function GET(
  */
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -66,7 +66,7 @@ export async function PUT(
       return errorResponse('权限不足', 403);
     }
 
-    const { id } = idSchema.parse({ id: params.id });
+    const { id } = idSchema.parse({ id: (await params).id });
     const body = await request.json();
     const validated = updateRoleSchema.parse(body);
 
@@ -112,7 +112,7 @@ export async function PUT(
  */
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -123,7 +123,7 @@ export async function DELETE(
       return errorResponse('权限不足', 403);
     }
 
-    const { id } = idSchema.parse({ id: params.id });
+    const { id } = idSchema.parse({ id: (await params).id });
 
     // 检查是否有关联用户
     const userCount = await prisma.userRole.count({ where: { roleId: id } });

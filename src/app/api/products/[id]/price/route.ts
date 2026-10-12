@@ -8,10 +8,10 @@ import { prisma } from '@/lib/prisma';
  */
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const productId = parseInt(params.id);
+    const productId = parseInt((await params).id);
 
     // 1. 先查 inventory_lots 的最新成本价
     const latestLot = await prisma.inventoryLot.findFirst({

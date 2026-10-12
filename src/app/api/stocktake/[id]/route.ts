@@ -11,13 +11,13 @@ import { z } from 'zod';
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
     if (!session) return errorResponse('请先登录', 401);
 
-    const { id } = idSchema.parse({ id: params.id });
+    const { id } = idSchema.parse({ id: (await params).id });
     const order = await StocktakeService.getById(id);
 
     return successResponse(order);
@@ -31,13 +31,13 @@ export async function GET(
  */
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
     if (!session) return errorResponse('请先登录', 401);
 
-    const { id } = idSchema.parse({ id: params.id });
+    const { id } = idSchema.parse({ id: (await params).id });
     const body = await request.json();
 
     // 开始盘点

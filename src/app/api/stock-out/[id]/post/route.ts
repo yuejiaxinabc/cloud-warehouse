@@ -6,10 +6,10 @@ import { serializeBigInt } from '@/lib/serialize';
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const id = Number(params.id);
+    const id = Number((await params).id);
     const ip = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
     const session = await getServerSession(authOptions);
     const userId = session?.user ? Number((session.user as any).id) : null;

@@ -4,9 +4,9 @@ import { headers } from 'next/headers';
 /**
  * 获取客户端真实 IP
  */
-export function getClientIp(): string {
+export async function getClientIp(): Promise<string> {
   try {
-    const h = headers();
+    const h = await headers();
     return h.get('x-forwarded-for')?.split(',')[0]?.trim()
       || h.get('x-real-ip')
       || h.get('cf-connecting-ip')
@@ -19,9 +19,9 @@ export function getClientIp(): string {
 /**
  * 获取客户端平台标识
  */
-export function getClientPlatform(): string {
+export async function getClientPlatform(): Promise<string> {
   try {
-    const h = headers();
+    const h = await headers();
     return h.get('x-client-platform') || 'web';
   } catch {
     return 'web';
