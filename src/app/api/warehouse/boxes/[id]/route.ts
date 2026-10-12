@@ -8,9 +8,9 @@ import { serializeBigInt } from "@/lib/serialize";
  * PUT /api/warehouse/boxes/[id] - 停用/启用单个货位
  * body: { status: 0|1, remark? }
  */
-export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const id = params.id;
+    const id = (await params).id;
     const body = await req.json();
     const status = body.status !== undefined ? Number(body.status) : null;
 

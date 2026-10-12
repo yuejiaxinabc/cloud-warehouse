@@ -135,7 +135,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    await writeLog({ module: 'user', action: 'create', ip: getClientIp(), content: '新建用户 ' + user.username, refType: 'user', refId: user.id });
+    await writeLog({ module: 'user', action: 'create', ip: await getClientIp(), content: '新建用户 ' + user.username, refType: 'user', refId: user.id });
     return NextResponse.json(serializeBigInt({
       success: true,
       code: 0,
@@ -204,7 +204,7 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    await writeLog({ module: 'user', action: 'update', ip: getClientIp(), content: '更新用户 ID:' + id, refType: 'user', refId: Number(id) });
+    await writeLog({ module: 'user', action: 'update', ip: await getClientIp(), content: '更新用户 ID:' + id, refType: 'user', refId: Number(id) });
     return NextResponse.json(serializeBigInt({
       success: true,
       code: 0,
@@ -236,7 +236,7 @@ export async function DELETE(request: NextRequest) {
     await prisma.userRole.deleteMany({ where: { userId: BigInt(id) } });
     await prisma.user.delete({ where: { id: BigInt(id) } });
 
-    await writeLog({ module: 'user', action: 'delete', ip: getClientIp(), content: '删除用户 ID:' + id, refType: 'user', refId: Number(id) });
+    await writeLog({ module: 'user', action: 'delete', ip: await getClientIp(), content: '删除用户 ID:' + id, refType: 'user', refId: Number(id) });
     return NextResponse.json(serializeBigInt({
       success: true,
       code: 0,

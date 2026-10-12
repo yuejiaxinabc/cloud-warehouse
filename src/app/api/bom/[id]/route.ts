@@ -10,13 +10,13 @@ import { successResponse, errorResponse, handleApiError } from '@/lib/errors';
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
     if (!session) return errorResponse('请先登录', 401);
 
-    const { id } = idSchema.parse({ id: params.id });
+    const { id } = idSchema.parse({ id: (await params).id });
     const bom = await BomService.getById(id);
 
     return successResponse(bom);
@@ -30,13 +30,13 @@ export async function GET(
  */
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
     if (!session) return errorResponse('请先登录', 401);
 
-    const { id } = idSchema.parse({ id: params.id });
+    const { id } = idSchema.parse({ id: (await params).id });
     const body = await request.json();
 
     const bom = await BomService.update(id, body);
@@ -51,13 +51,13 @@ export async function PUT(
  */
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
     if (!session) return errorResponse('请先登录', 401);
 
-    const { id } = idSchema.parse({ id: params.id });
+    const { id } = idSchema.parse({ id: (await params).id });
     await BomService.delete(id);
 
     return successResponse(null, 'BOM 已删除');

@@ -9,13 +9,13 @@ import { inboundPurchaseRequest } from '@/lib/purchase-inbound';
  * 已完成（未入库）的购买申请手动入库，支持选择仓库/库位。
  * body: { warehouseId, locationId, boxId?, unitCost? }
  */
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireAuth();
     const operatorId = auth.type === 'session'
       ? (Number((auth.session.user as any).id) || undefined)
       : (auth.userId || undefined);
-    const id = BigInt(params.id);
+    const id = BigInt((await params).id);
     const body = await req.json();
     const { warehouseId, locationId, boxId, unitCost } = body;
 

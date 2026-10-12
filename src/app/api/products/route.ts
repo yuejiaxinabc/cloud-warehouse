@@ -270,7 +270,7 @@ export async function POST(req: NextRequest) {
       return product;
     });
 
-    const _p = PLATFORM_NAMES[getClientPlatform()] || getClientPlatform(); await writeLog({ module: 'product', action: 'create', ip: getClientIp(), content: `新建商品 ${name} (${code}) [来源: ${_p}]`, refType: 'product', refId: result.id });
+    const _p = PLATFORM_NAMES[await getClientPlatform()] || await getClientPlatform(); await writeLog({ module: 'product', action: 'create', ip: await getClientIp(), content: `新建商品 ${name} (${code}) [来源: ${_p}]`, refType: 'product', refId: result.id });
     return NextResponse.json({ success: true, data: serializeBigInt(result) });
   } catch (error: any) {
     return handleApiError(error);
@@ -312,7 +312,7 @@ export async function PUT(req: NextRequest) {
       data,
     });
 
-    const _p2 = PLATFORM_NAMES[getClientPlatform()] || getClientPlatform(); await writeLog({ module: 'product', action: 'update', ip: getClientIp(), content: `编辑商品 ID:${id} [来源: ${_p2}]`, refType: 'product', refId: Number(id) });
+    const _p2 = PLATFORM_NAMES[await getClientPlatform()] || await getClientPlatform(); await writeLog({ module: 'product', action: 'update', ip: await getClientIp(), content: `编辑商品 ID:${id} [来源: ${_p2}]`, refType: 'product', refId: Number(id) });
     return NextResponse.json({ success: true, data: serializeBigInt(product) });
   } catch (error: any) {
     return handleApiError(error);
@@ -361,7 +361,7 @@ export async function DELETE(req: NextRequest) {
       await tx.product.delete({ where: { id: productId } });
     });
 
-    const _p3 = PLATFORM_NAMES[getClientPlatform()] || getClientPlatform(); await writeLog({ module: 'product', action: 'delete', ip: getClientIp(), content: `删除商品 ID:${productId} [来源: ${_p3}]`, refType: 'product', refId: productId });
+    const _p3 = PLATFORM_NAMES[await getClientPlatform()] || await getClientPlatform(); await writeLog({ module: 'product', action: 'delete', ip: await getClientIp(), content: `删除商品 ID:${productId} [来源: ${_p3}]`, refType: 'product', refId: productId });
     return NextResponse.json({ success: true });
   } catch (error: any) {
     return handleApiError(error);

@@ -16,13 +16,13 @@ const approveSchema = z.object({
  */
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
     if (!session) return errorResponse('请先登录', 401);
 
-    const { id } = idSchema.parse({ id: params.id });
+    const { id } = idSchema.parse({ id: (await params).id });
     const body = await request.json();
     const { approved, remark } = approveSchema.parse(body);
 

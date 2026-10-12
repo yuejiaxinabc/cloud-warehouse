@@ -11,13 +11,13 @@ import { inboundPurchaseRequest } from '@/lib/purchase-inbound';
  * - inbound=true：完成的同时直接入库（自动创建/匹配商品 → 生成采购入库单并过账 → 写入库位库存）
  * - inbound=false：仅标记完成，后续可通过「入库」操作手动入库（支持选库位）
  */
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireAuth();
     const operatorId = auth.type === 'session'
       ? (Number((auth.session.user as any).id) || undefined)
       : (auth.userId || undefined);
-    const id = BigInt(params.id);
+    const id = BigInt((await params).id);
     const body = await req.json();
     const { inbound, warehouseId, locationId, boxId, unitCost } = body;
 

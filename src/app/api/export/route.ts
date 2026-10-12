@@ -148,20 +148,21 @@ export async function GET(request: NextRequest) {
 
       case 'TRANSFER': {
         const orders = await prisma.transferOrder.findMany({
-          include: {
-            fromWarehouse: { select: { name: true } },
-            toWarehouse: { select: { name: true } },
-          },
+          include: { _count: { select: { transferItems: true } } },
           orderBy: { createdAt: 'desc' },
         });
+        const warehouses = await prisma.warehouse.findMany({ select: { id: true, name: true } });
+        const whMap = new Map<bigint, string>();
+        for (const w of warehouses) whMap.set(w.id, w.name);
+        const transferStatusMap: Record<string, string> = { DRAFT: '草稿', SENT: '已发出', RECEIVED: '已收货', CANCELLED: '已取消' };
 
-        headers = ['调拨单号', '源仓库', '目标仓库', '总数量', '状态', '创建时间'];
+        headers = ['调拨单号', '源仓库', '目标仓库', '商品项数', '状态', '创建时间'];
         rows = orders.map(o => [
           o.orderNo,
-          o.fromWarehouse?.name || '',
-          o.toWarehouse?.name || '',
-          Number(o.totalQty || 0),
-          o.status,
+          whMap.get(o.fromWhId) || String(o.fromWhId),
+          whMap.get(o.toWhId) || String(o.toWhId),
+          (o._count?.transferItems ?? 0),
+          o.status ? (transferStatusMap[o.status] || o.status) : '',
           o.createdAt ? new Date(o.createdAt).toLocaleString('zh-CN') : '',
         ]);
         fileName = '调拨记录';
@@ -169,20 +170,24 @@ export async function GET(request: NextRequest) {
       }
 
       case 'STOCKTAKE': {
-        const orders = await prisma.stocktakeOrder.findMany({
+        const orders = await prisma.countOrder.findMany({
           include: {
             warehouse: { select: { name: true } },
+            _count: { select: { countItems: true } },
           },
           orderBy: { createdAt: 'desc' },
         });
 
-        headers = ['盘点单号', '仓库', '类型', '总数量', '状态', '创建时间'];
+        const stocktakeTypeMap: Record<string, string> = { FULL: '全盘', PARTIAL: '抽盘', CYCLE: '循环盘点' };
+        const stocktakeStatusMap: Record<string, string> = { DRAFT: '草稿', COUNTING: '盘点中', ADJUSTED: '已调整', CANCELLED: '已取消' };
+
+        headers = ['盘点单号', '仓库', '类型', '商品项数', '状态', '创建时间'];
         rows = orders.map(o => [
           o.orderNo,
           o.warehouse?.name || '',
-          o.type || '',
-          Number(o.totalQty || 0),
-          o.status,
+          o.type ? (stocktakeTypeMap[o.type] || o.type) : '',
+          (o._count?.countItems ?? 0),
+          o.status ? (stocktakeStatusMap[o.status] || o.status) : '',
           o.createdAt ? new Date(o.createdAt).toLocaleString('zh-CN') : '',
         ]);
         fileName = '盘点记录';
@@ -231,21 +236,24 @@ export async function GET(request: NextRequest) {
 
       case 'TRANSACTION': {
         const txns = await prisma.inventoryTransaction.findMany({
-          include: {
-            product: { select: { code: true, name: true } },
-            warehouse: { select: { name: true } },
-          },
           orderBy: { createdAt: 'desc' },
           take: 10000,
         });
+        const products = await prisma.product.findMany({ select: { id: true, code: true, name: true } });
+        const prodMap = new Map<bigint, { code: string; name: string }>();
+        for (const p of products) prodMap.set(p.id, { code: p.code, name: p.name });
+        const warehouses = await prisma.warehouse.findMany({ select: { id: true, name: true } });
+        const whMap = new Map<bigint, string>();
+        for (const w of warehouses) whMap.set(w.id, w.name);
+        const txnTypeMap: Record<string, string> = { INBOUND: '入库', OUTBOUND: '出库', TRANSFER: '调拨', ADJUST: '调整', LOCK: '锁定', UNLOCK: '解锁' };
 
         headers = ['类型', '单号', '商品编码', '商品名称', '仓库', '批次号', '数量', '成本价', '变动前', '变动后', '备注', '时间'];
         rows = txns.map(t => [
-          t.txnType,
+          t.txnType ? (txnTypeMap[t.txnType] || t.txnType) : '',
           t.refNo || '',
-          t.product?.code || '',
-          t.product?.name || '',
-          t.warehouse?.name || '',
+          prodMap.get(t.productId)?.code || '',
+          prodMap.get(t.productId)?.name || '',
+          whMap.get(t.warehouseId) || '',
           t.lotNumber || '',
           Number(t.quantity || 0),
           t.costPrice ? Number(t.costPrice).toFixed(2) : '',
