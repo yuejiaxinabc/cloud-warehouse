@@ -7,6 +7,20 @@
 
 ## 版本历史
 
+### v1.1.0（2026-10-12 · 技术栈升级 + 体验与可靠性）
+
+> 本次升级已部署上线（`warehouse.yuejiaxin.ln.cn`，Next 15.5.27 / React 19）。
+
+- ✅ **UPG-2026-1101** 技术栈升级：Next.js `14.2.35 → 15.5.x`、React/React-DOM `18 → 19`；引入 `@ant-design/v5-patch-for-react-19` 兼容 antd v5；next-auth `→ 4.24.15`（安装需 `--legacy-peer-deps`）
+- ✅ **UPG-2026-1102** Next 15 破坏性适配：动态路由 `params` 与 `headers()`/`cookies()` 改为异步 `await`（22 个 API 路由、3 处 `headers()`、7 处客户端 IP 调用）
+- ✅ **FEAT-2026-1103** 新增前端「数据备份」页面 `/settings/backup`：备份列表（单选日期）、哈希链完整性报告、立即备份、回滚到所选备份（Popconfirm 强确认 + 回滚前自动快照）；侧边栏新增「数据备份」入口
+- ✅ **FEAT-2026-1104** 新增备份 / 回滚桥接 API（`GET/POST /api/admin/backup`、`POST /api/admin/backup/restore`，`requireAdmin` 鉴权 + `execFile` 参数化防命令注入）
+- ✅ **FIX-2026-1105（P0）** 数据导出修复：盘点记录（引用已重命名模型 `stocktakeOrder` → 改用 `countOrder`，消除 500）；调拨 / 库存流水（去除 schema 中已不存在的关系 `include`，改用外键 Map 映射，消除 400）
+- ✅ **FIX-2026-1106** nginx 旧 `/admin-backup` 坏路由（307→/login 连环跳转）改为 `301` 重定向至 `/settings/backup`
+- ✅ **OPS-2026-1107** 部署前快照机制：大版本部署前生成 `/var/backups/pre-deploy-*.tar.gz`，可回滚
+- 🔶 `next.config.js` 仍 `ignoreBuildErrors: true`（缺陷 1 此前被其掩盖，建议后续收紧以提前暴露 schema 漂移类问题）
+- ℹ️ 1.1.0 代码改动截至文档日**尚未 git commit / push**，工作树相对 `main` 为 dirty
+
 ### v1.0.1（2026-10-11 · 安全加固版）
 
 安全审计后的集中修复版本，全部改动已部署上线并复测通过：
