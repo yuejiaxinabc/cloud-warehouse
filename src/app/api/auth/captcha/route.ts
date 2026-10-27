@@ -1,64 +1,71 @@
 import { NextRequest, NextResponse } from "next/server";
-import crypto from "crypto";
+import { issueCaptcha, consumeCaptcha } from "@/lib/captcha-store";
+import { glyphPath } from "@/lib/captcha-font";
 
-// 内存存储：opaque token → { text, expiresAt }
-// 生产环境建议换 Redis
-const captchaStore = new Map<string, { text: string; expiresAt: number }>();
+/**
+ * 验证码（FIX-2026-1012）
+ *
+ * 原先用 <text> 节点画字符，答案明文躺在响应里，一条正则就能读出来
+ * （实测解析出 88bJ 并成功登录）。现在每个字符用 5x7 点阵画成 <path>，
+ * 响应里没有可提取的文本，破解需要做抗旋转/抗噪的图像识别。
+ */
 
-const EXPIRE_MS = 5 * 60 * 1000; // 5分钟
-
-/** 生成不透明 token（随机字符串，与答案无关） */
-function genToken(): string {
-  return crypto.randomBytes(24).toString("base64url");
+function rand(min: number, max: number): number {
+  return min + Math.random() * (max - min);
 }
 
-function genText(len = 4) {
-  // 去掉了易混淆的 0/O/1/l/I
-  const CHARS = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
-  let t = "";
-  for (let i = 0; i < len; i++) t += CHARS[Math.floor(Math.random() * CHARS.length)];
-  return t;
-}
-
-/** 生成防机器人 SVG 验证码图（答案不下发客户端，FIX-2026-1002） */
 function genSvg(text: string): string {
-  const w = 120, h = 44;
-  const chars = text.split("");
-  const colors = ["#1677FF", "#4096FF", "#1677FF", "#4096FF"];
-  const charSvg = chars
-    .map((ch, i) => {
-      const x = 22 + i * 22 + (Math.random() * 4 - 2);
-      const y = 30 + (Math.random() * 4 - 2);
-      const rot = (Math.random() - 0.5) * 14;
-      return `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" fill="${colors[i % colors.length]}" font-family="Courier New,monospace" font-size="24" font-weight="bold" transform="rotate(${rot.toFixed(1)} ${x.toFixed(1)} ${y.toFixed(1)})">${ch}</text>`;
-    })
-    .join("");
-  const noise = Array.from({ length: 4 }, () => {
-    const x1 = Math.random() * w, y1 = Math.random() * h, x2 = Math.random() * w, y2 = Math.random() * h;
-    const xm = Math.random() * w, ym = Math.random() * h;
-    return `<path d="M${x1.toFixed(0)} ${y1.toFixed(0)} Q${xm.toFixed(0)} ${ym.toFixed(0)} ${x2.toFixed(0)} ${y2.toFixed(0)}" stroke="rgba(150,180,230,0.35)" fill="none" stroke-width="1"/>`;
+  const w = 132, h = 46;
+  const colors = ["#1677FF", "#4096FF", "#1D4ED8", "#2563EB"];
+
+  const chars = text.split("").map((ch, i) => {
+    const d = glyphPath(ch);
+    if (!d) return "";
+    const x = 12 + i * 28 + rand(-3, 3);
+    const y = 14 + rand(-4, 4);
+    const scale = rand(2.5, 3.1);
+    const rot = rand(-14, 14);
+    const skew = rand(-6, 6);
+    const fill = colors[i % colors.length];
+    // 先斜切再旋转再缩放，落在 (x,y)
+    const t = `translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${rot.toFixed(1)}) skewX(${skew.toFixed(1)}) scale(${scale.toFixed(2)})`;
+    // 描边 + 填充一起用，边缘更糊，干扰识别
+    return `<path d="${d}" fill="${fill}" stroke="${fill}" stroke-width="0.18" transform="${t}"/>`;
   }).join("");
-  const dots = Array.from({ length: 14 }, () => {
-    const cx = (Math.random() * w).toFixed(0), cy = (Math.random() * h).toFixed(0);
-    return `<circle cx="${cx}" cy="${cy}" r="1" fill="rgba(150,170,220,0.4)"/>`;
+
+  const noise = Array.from({ length: 5 }, () => {
+    const x1 = rand(0, w), y1 = rand(0, h), x2 = rand(0, w), y2 = rand(0, h);
+    const xm = rand(0, w), ym = rand(0, h);
+    return `<path d="M${x1.toFixed(0)} ${y1.toFixed(0)} Q${xm.toFixed(0)} ${ym.toFixed(0)} ${x2.toFixed(0)} ${y2.toFixed(0)}" stroke="rgba(120,160,220,0.45)" fill="none" stroke-width="1.2"/>`;
   }).join("");
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F0F5FF"/><stop offset="1" stop-color="#E6F0FF"/></linearGradient></defs><rect width="${w}" height="${h}" fill="url(#g)"/>${noise}${dots}${charSvg}</svg>`;
+
+  const dots = Array.from({ length: 24 }, () => {
+    const cx = rand(0, w).toFixed(0), cy = rand(0, h).toFixed(0);
+    return `<circle cx="${cx}" cy="${cy}" r="1.1" fill="rgba(130,160,215,0.5)"/>`;
+  }).join("");
+
+  // FIX-2026-1012b：这里原本用 <defs><linearGradient> 做渐变背景，
+  // 但 Next 的 SWC 压缩会把相邻的模板字面量折叠成单个字符串，
+  // 折叠时把 "<defs>...</defs>" 整段丢掉，还漏掉 svg 开标签的 ">"，
+  // 导致整个 SVG 被当作属性值吞掉、验证码渲染成空白。
+  // （tsc 单独编译是正确的，只有 next build 的 SWC 折叠会出错。）
+  // 改法：去掉 defs / 渐变，用纯色背景 + 数组拼接，规避字面量折叠。
+  const BG = "#F0F5FF";
+  const parts: string[] = [];
+  parts.push('<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '">');
+  parts.push('<rect width="' + w + '" height="' + h + '" fill="' + BG + '"/>');
+  parts.push(noise);
+  parts.push(dots);
+  parts.push(chars);
+  parts.push('</svg>');
+  return parts.join("");
 }
 
-/** GET /api/auth/captcha - 获取新验证码 token 和 SVG 图（不返回答案文本） */
-export async function GET(req: NextRequest) {
-  const text = genText(4);
-  const token = genToken();
-
-  // 清理过期 entry（懒清理）
-  const now = Date.now();
-  for (const [k, v] of captchaStore) {
-    if (v.expiresAt < now) captchaStore.delete(k);
-  }
-  captchaStore.set(token, { text, expiresAt: now + EXPIRE_MS });
-
+/** GET /api/auth/captcha - 取新验证码（只回图片，绝不回答案文本） */
+export async function GET(_req: NextRequest) {
+  const { token, text } = issueCaptcha(4);
   return NextResponse.json(
-    { token, svg: genSvg(text) }, // 仅返回图片，绝不返回答案 text（FIX-2026-1002）
+    { token, svg: genSvg(text) },
     {
       headers: {
         "Cache-Control": "no-store, no-cache, must-revalidate",
@@ -68,24 +75,18 @@ export async function GET(req: NextRequest) {
   );
 }
 
-/** POST /api/auth/captcha - 验证（登录前预验，防止机器人批量注册） */
+/**
+ * POST /api/auth/captcha - 独立校验（保留给旧客户端）
+ *
+ * 注意：票据一次性。走这里校验过之后，同一 token 不能再用于登录；
+ * Web 登录页已改为把 captchaToken / captchaAnswer 直接提交给 NextAuth，
+ * 由 authorize() 统一消费。
+ */
 export async function POST(req: NextRequest) {
   try {
     const { token, answer } = await req.json();
-    if (!token || typeof token !== "string") {
-      return NextResponse.json({ success: false, error: "参数错误" }, { status: 400 });
-    }
-    const stored = captchaStore.get(token);
-    if (!stored) return NextResponse.json({ success: false, error: "验证码已过期，请刷新" });
-    if (Date.now() > stored.expiresAt) {
-      captchaStore.delete(token);
-      return NextResponse.json({ success: false, error: "验证码已过期，请刷新" });
-    }
-    if (stored.text.toLowerCase() !== String(answer || "").trim().toLowerCase()) {
-      captchaStore.delete(token);
-      return NextResponse.json({ success: false, error: "验证码错误" });
-    }
-    captchaStore.delete(token); // 一次性
+    const r = consumeCaptcha(String(token || ""), String(answer || ""));
+    if (!r.ok) return NextResponse.json({ success: false, error: r.error });
     return NextResponse.json({ success: true });
   } catch {
     return NextResponse.json({ success: false, error: "参数错误" }, { status: 400 });

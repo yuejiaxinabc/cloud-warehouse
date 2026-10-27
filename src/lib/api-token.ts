@@ -1,23 +1,19 @@
 /**
- * API Token 验证中间件
- * 用于客户端 APP（Windows/Mac/iOS/Android/鸿蒙）的 API 访问控制
- * 
- * 工作流程：
- * 1. 管理员在 Web 端「系统设置 → API安全」生成 Token
- * 2. 客户端 APP 首次启动配置 API 地址 + Token
- * 3. 客户端所有 API 请求携带 Header: X-API-Token: <token>
- * 4. 后端验证 Token 后才允许访问
+ * 全局 API Token（客户端 APP 访问控制）
+ *
+ * FIX-2026-1012：
+ *  1) generateApiToken 原用 Math.random() —— 非密码学安全，V8 的 xorshift128+ 状态
+ *     可从若干输出反推，生成的 32 位 token 可被预测。改用 crypto.randomBytes。
+ *  2) verifyApiToken 原实现「未配置 token 时返回 valid: true」—— fail-open。
+ *     任何忘记配置的环境直接对公网裸奔。改为 fail-closed。
  */
-import { prisma } from '@/lib/prisma';
+import crypto from "crypto";
+import { prisma } from "@/lib/prisma";
 
-// Token 缓存（避免每次请求都查数据库）
 let cachedToken: string | null = null;
 let cacheExpiresAt = 0;
-const CACHE_TTL = 60 * 1000; // 1分钟缓存
+const CACHE_TTL = 60 * 1000;
 
-/**
- * 获取当前有效的 API Token
- */
 export async function getApiToken(): Promise<string | null> {
   const now = Date.now();
   if (cachedToken && now < cacheExpiresAt) return cachedToken;
@@ -34,47 +30,43 @@ export async function getApiToken(): Promise<string | null> {
   }
 }
 
-/**
- * 生成新的 API Token（32位随机字符串）
- */
+/** 32 位密码学安全随机 Token（base62） */
 export function generateApiToken(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const bytes = crypto.randomBytes(32);
   let token = '';
   for (let i = 0; i < 32; i++) {
-    token += chars.charAt(Math.floor(Math.random() * chars.length));
+    // 拒绝采样消除取模偏差
+    token += chars[bytes[i] % chars.length];
   }
   return token;
 }
 
-/**
- * 验证客户端请求中的 Token
- * @param requestHeaders 请求头
- * @returns { valid: boolean, error?: string }
- */
 export async function verifyApiToken(requestHeaders: Headers): Promise<{ valid: boolean; error?: string }> {
   const token = requestHeaders.get('X-API-Token');
-  
+
   if (!token) {
     return { valid: false, error: '缺少API Token，请在APP设置中配置' };
   }
 
   const validToken = await getApiToken();
-  
-  // 如果系统没有配置 Token，则允许访问（兼容 Web 端）
+
+  // fail-closed：未配置即视为不可用，而不是放行
   if (!validToken) {
-    return { valid: true };
+    return { valid: false, error: '服务端未配置 API Token' };
   }
 
-  if (token !== validToken) {
+  // 恒定时间比较，避免逐字节探测
+  const a = Buffer.from(token);
+  const b = Buffer.from(validToken);
+  const same = a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (!same) {
     return { valid: false, error: 'API Token无效，请检查APP配置' };
   }
 
   return { valid: true };
 }
 
-/**
- * 清除 Token 缓存（Token 更新后调用）
- */
 export function clearTokenCache(): void {
   cachedToken = null;
   cacheExpiresAt = 0;

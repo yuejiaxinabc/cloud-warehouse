@@ -57,6 +57,7 @@ npm run dev                    # http://localhost:3000
 
 | 文档 | 内容 |
 |------|------|
+| [docs/UPDATE-2026-10-27.md](docs/UPDATE-2026-10-27.md) | **v1.0.2 更新说明**：改了什么、在哪体现、修了哪些 Bug |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | 从零部署上线（保姆级） |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发环境、架构与业务规则 |
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | 版本历史与迭代路线 |

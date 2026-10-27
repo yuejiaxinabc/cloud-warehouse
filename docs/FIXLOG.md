@@ -5,6 +5,105 @@
 
 ---
 
+## FIX-2026-1025 · `Role` 表被清空导致全员无法登录（P0，已修复）
+
+| 项目 | 内容 |
+|------|------|
+| 日期 | 2026-10-27 |
+| 严重程度 | 🔴 P0（线上实测复现） |
+| 影响范围 | 全部账号登录；表现为「输对密码也进不去」 |
+| 根因 | 数据库 `Role` 表 **0 行**，而 `user_roles` 仍有 6 条指向 `role_id` 1–6（外键存在、数据被清空）。`authorize()` 里 `prisma.user.findFirst({ include: { userRoles: { include: { role: true } } } })` 命中 null → 抛 `Inconsistent query result: Field role is required to return data, got null instead`，且错误原文回显到 `/api/auth/error` |
+| 实测证据 | 解出验证码后登录 `admin/Admin@123` → `Invalid prisma.user.findFirst() invocation: Inconsistent query result: Field role is required to return data, got null instead.`；`SELECT COUNT(*) FROM Role` = 0 |
+| 修复方案 | ① 补回 6 个角色（admin/wh_manager/wh_keeper/buyer/sales/auditor），id 与 `user_roles`、`role_permissions` 对齐；② `prisma/seed.ts` 由 `create` 改 `upsert`，避免重复执行时唯一键冲突中断导致角色缺失；③ `authorize()` 对 `userRoles`/`role` 判空，不再把 ORM 原始异常抛给客户端 |
+| 状态 | ☑ 已修复（2026-10-27 补数据 + 复测登录成功） |
+
+```sql
+INSERT INTO `Role` (id, name, code, status, created_at, updated_at) VALUES
+(1,'系统管理员','admin',1,NOW(3),NOW(3)),
+(2,'仓库主管','wh_manager',1,NOW(3),NOW(3)),
+(3,'仓管员','wh_keeper',1,NOW(3),NOW(3)),
+(4,'采购员','buyer',1,NOW(3),NOW(3)),
+(5,'销售员','sales',1,NOW(3),NOW(3)),
+(6,'审计员','auditor',1,NOW(3),NOW(3));
+```
+
+---
+
+## FIX-2026-1012 · 安全复检九项（P0~P2，已修复）
+
+| 项目 | 内容 |
+|------|------|
+| 日期 | 2026-10-27 |
+| 严重程度 | 🔴 P0 ×2 / 🟠 P1 ×4 / 🟡 P2 ×3 |
+| 影响范围 | 登录、上传、CSRF、API Token、会话、限速 |
+
+| 子项 | 问题 | 位置 | 状态 |
+|---|---|---|---|
+| a | 验证码存储写在 route 内，`authorize()` 访问不到 → 直接 POST callback 可完全绕过 | 新增 `src/lib/captcha-store.ts`；`src/lib/auth.ts:52` | ☑ 已修复 |
+| b | 验证码 SVG 用 `<text>` 节点，答案明文躺在响应里（正则即可提取） | 新增 `src/lib/captcha-font.ts`（5×7 点阵 `<path>`） | ☑ 已修复 |
+| c | 上传按客户端 `Content-Type` + 后缀判断 → 可上传 `.html` → 存储型 XSS → 账号接管 | `src/app/api/upload/route.ts:23`（魔数嗅探 + 白名单 + crypto 随机名 + 拒绝 SVG） | ☑ 已修复 |
+| d | CSRF 同源基准取 `X-Forwarded-Host`（客户端可伪造），同时伪造 Origin 与 XFH 即绕过 | `src/middleware.ts:157-186`（改用请求真实 `Host`） | ☑ 已修复 |
+| e | 登录错误文案区分「用户名不存在/密码错误还剩 N 次」→ 用户名枚举；且 `bcrypt.compare` 仅在用户存在时执行，响应时间差也是通道 | `src/lib/auth.ts:103`（统一文案 + dummy bcrypt） | ☑ 已修复 |
+| f | 失败计数只按 username → 对 admin 打 5 次即可锁死 30 分钟（无需凭据的 DoS） | `src/lib/auth.ts:22-27`（IP+账号双维度、Redis 计数、指数退避不硬锁） | ☑ 已修复 |
+| g | API Token 用 `Math.random()`（可预测）+ 未配置即放行（fail-open） | `src/lib/api-token.ts`（`crypto.randomBytes` + fail-closed + `timingSafeEqual`） | ☑ 已修复 |
+| h | `NEXTAUTH_SECRET` 曾随 `..env.vNsxxG4DI5` 提交进公开仓库 | 新增 `src/lib/env-guard.ts` + `src/instrumentation.ts`；`middleware.ts:118` 弱密钥全站 503 | ☑ 代码已加闸门；**密钥轮换与 git 历史清理仍需人工执行** |
+| i | 会话 Cookie 未显式声明安全属性；`hasRole()` 大小写不一致；ioredis 未监听 `error` 会打挂进程 | `src/lib/auth.ts:152-168,205`；`src/lib/redis.ts` | ☑ 已修复 |
+
+**复测（线上）**：
+
+```
+不带验证码直接打 callback   → error=验证码参数错误
+伪造 captchaToken           → error=验证码已过期，请刷新
+有效票据 + 错误答案         → error=验证码错误，票据销毁
+同一票据重放                → error=验证码已过期，请刷新
+不存在用户 vs 存在用户      → 文案完全一致
+upload 上传 .html（伪造 image/png） → 只支持 JPG / PNG / GIF / WEBP 图片
+```
+
+---
+
+## FIX-2026-1013 · 入库不落货位导致货架地图空白（P0，已修复）
+
+| 项目 | 内容 |
+|------|------|
+| 日期 | 2026-10-27 |
+| 严重程度 | 🔴 P0（业务断链） |
+| 影响范围 | 入库后的商品在货架地图上完全不可见；`/shelf-map`、`/inventory` 数据互相对不上 |
+| 根因 | `stock-in.service` 只写 `inventory`，既不写 `inventory.locationId` 也不写 `location_stocks`；而货架地图只读 `location_stocks` → 「库存有 6 条、货架一片空白」 |
+| 修复方案 | ① `schema.prisma:614` 增 `InboundItem.locationId`；② 新增 `src/lib/location-binding.ts`（四段编码 `区-排-列-位`、三段旧码自动补齐、`syncLocationStock()`、`assertLocationInWarehouse()`）；③ `src/services/stock-in.service.ts:229-281` 过账强制校验货位并双写；④ `src/app/api/shelf-map/route.ts:82-113` 对历史数据按 `inventory.location_id` 兜底 |
+| 状态 | ☑ 已修复 |
+
+---
+
+## FIX-2026-1015 · 数据导出 500 / 400（P0，已修复）
+
+| 项目 | 内容 |
+|------|------|
+| 日期 | 2026-10-27 |
+| 严重程度 | 🔴 P0 |
+| 影响范围 | 盘点记录导出、调拨记录导出、库存流水导出 |
+| 根因 | ① `prisma.stocktakeOrder` 模型不存在（schema 里叫 `CountOrder`）→ 调用即 `TypeError` → 500；② `TransferOrder` 无 `fromWarehouse/toWarehouse` 关系、无 `totalQty` 字段；③ `InventoryTransaction` 无 `product/warehouse` 关系、时间字段是 `txnTime` 而非 `createdAt` |
+| 修复方案 | `src/app/api/export/route.ts:154-289` 全部改为按外键查 Map 映射 / 明细聚合，不再依赖不存在的关系 |
+| 状态 | ☑ 已修复（实测三类导出均 200） |
+
+---
+
+## FIX-2026-1014 / 1016~1023 · 货位与体验批量修复（P1~P3，已修复）
+
+| 编号 | 内容 | 位置 |
+|------|------|------|
+| FIX-2026-1014 | 新建仓库统一建 A–Z 26 个货架、每架 100 个货位（原 A–M 且编码不补零） | 新增 `src/lib/shelf-init.ts`；`api/warehouse/route.ts:74` |
+| FIX-2026-1016 | 新增库存分析四类（对账/呆滞/ABC/补货）；扫码点击即拉起摄像头 | 新增 `api/inventory/analysis/route.ts`、`(dashboard)/inventory/analysis/page.tsx` |
+| FIX-2026-1017 | 货位编码不再追加 `-1/-2` 序号（四段变五段） | `(dashboard)/shelf-map/page.tsx:162` |
+| FIX-2026-1018 | 网格按「排-列-位」正向落位，空位铺满对齐 | `(dashboard)/shelf-map/page.tsx:243` |
+| FIX-2026-1019 | 草稿单绑货位接口，解除「先有鸡还是先有蛋」死锁 | 新增 `api/stock-in/[id]/location/route.ts` |
+| FIX-2026-1020 | 统一货位下拉改读 `locations`（原读已空的 `boxes`） | `(dashboard)/stock-in/[id]/page.tsx` |
+| FIX-2026-1021 | 序列号追踪无关键词时返回全部并汇总批次号 | `api/serial/route.ts` |
+| FIX-2026-1022 | 全站 `Cache-Control: no-store`，修复入库后仍显示旧数据 | `middleware.ts:14` |
+| FIX-2026-1023 | 货位独占：一个货位只能放一种商品；接口返回 `occupiedBy`/`isEmpty` | 新增 `src/lib/location-occupancy.ts`；`api/warehouse/locations/route.ts:56` |
+
+---
+
 ## FIX-2026-1001 · API 鉴权全局绕过（P0，待修复）
 
 | 项目 | 内容 |

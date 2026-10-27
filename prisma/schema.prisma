@@ -418,6 +418,7 @@ model Location {
   zone Zone @relation(fields: [zoneId], references: [id])
   locationStocks LocationStock[]
   boxes          Box[]
+  inboundItems   InboundItem[]
   purchaseRequests PurchaseRequest[]
 
   @@unique([zoneId, code])
@@ -609,6 +610,8 @@ model InboundItem {
   productId     BigInt   @map("product_id") @db.UnsignedBigInt
   skuVariantId  BigInt?  @map("sku_variant_id") @db.UnsignedBigInt
   lotNumber     String?  @map("lot_number") @db.VarChar(50)
+  // FIX-2026-1013：入库明细必须记住货位，否则过账时无法把货落到货架上
+  locationId    BigInt?  @map("location_id") @db.UnsignedBigInt
   quantity      Decimal  @db.Decimal(18, 3)
   receivedQty   Decimal? @map("received_qty") @db.Decimal(18, 3)
   costPrice     Decimal? @map("cost_price") @db.Decimal(18, 4)
@@ -624,8 +627,9 @@ model InboundItem {
   recipientTime DateTime? @map("recipient_time") // 领用时间
   createdAt     DateTime @default(now()) @map("created_at")
 
-  order   InboundOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  product Product      @relation(fields: [productId], references: [id])
+  order    InboundOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product  Product      @relation(fields: [productId], references: [id])
+  location Location?    @relation(fields: [locationId], references: [id])
   lotAllocations InboundLotAllocation[]
 
   @@map("inbound_items")

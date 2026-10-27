@@ -243,7 +243,15 @@ export default function StockOutPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
       <h4 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: "#0F172A", whiteSpace: "nowrap" }}>出库管理</h4>
         <Space>
-          <Button icon={<ScanOutlined />} onClick={() => { setScanModalOpen(true); setTimeout(() => scanInputRef.current?.focus(), 300); }}>扫码出库</Button>
+          <Button
+            icon={<ScanOutlined />}
+            onClick={() => {
+              setScanModalOpen(true);
+              // FIX-2026-1016：点扫码直接拉起摄像头
+              setShowCamera(true);
+              setTimeout(() => scanInputRef.current?.focus(), 300);
+            }}
+          >扫码出库</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>手动出库</Button>
         </Space>
       </div>

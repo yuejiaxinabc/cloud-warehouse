@@ -72,6 +72,28 @@ openssl rand -base64 32        # 生成 NEXTAUTH_SECRET，复制输出
 
 > 🔴 安全红线：`.env` 含数据库密码与会话密钥，已被 `.gitignore` 排除，**绝不能提交到 Git**。
 
+## 5.5 反向代理与访问地址（非 localhost 部署必读）
+
+用公网 IP、域名、容器或云主机部署时，**反向代理必须透传访问地址**，否则 Next.js 中间件
+无法判断用户真实访问的是哪个地址，未登录访问会被重定向到 `http://localhost:3000/login`。
+
+nginx 完整示例见 [`deploy/nginx.conf.example`](../deploy/nginx.conf.example)，关键是这三行：
+
+```nginx
+proxy_set_header Host $http_host;                 # 用 $http_host，$host 会丢端口
+proxy_set_header X-Forwarded-Host $http_host;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+同时把 `.env` 里的 `NEXTAUTH_URL` 改成真实对外地址（如 `https://warehouse.example.com`），
+否则 NextAuth 生成的回调地址仍是 localhost。
+
+中间件侧的对应实现见 `src/middleware.ts` 的 `getRequestOrigin()`：它按
+`X-Forwarded-Host → Host → NEXTAUTH_URL` 的顺序解析，因此任意域名、任意端口、
+HTTP/HTTPS 都能正确跳转，无需在代码里写死地址。
+
+进程守护示例见 [`deploy/cloud-warehouse.service`](../deploy/cloud-warehouse.service)（systemd）。
+
 ## 6. 初始化数据库并构建
 
 ```bash

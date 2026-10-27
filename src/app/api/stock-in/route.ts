@@ -57,6 +57,8 @@ export async function POST(req: NextRequest) {
         inboundItems: items && items.length > 0 ? {
           create: items.map((it: any) => ({
             productId: Number(it.productId),
+            // FIX-2026-1013：之前这里把 locationId 丢了，过账时无货位可落
+            locationId: it.locationId ? Number(it.locationId) : null,
             quantity: Number(it.planQty || it.quantity),
             costPrice: it.unitPrice ? Number(it.unitPrice) : null,
             lotNumber: it.batchNo || null,

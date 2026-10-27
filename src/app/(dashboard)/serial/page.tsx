@@ -40,11 +40,14 @@ export default function SerialPage() {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
+  // FIX-2026-1015：进页面就加载全量商品追踪，不再强制先输关键词，
+  // 避免「有商品但页面空的」错觉。搜索框只做过滤。
+  useEffect(() => {
+    fetchData('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const fetchData = async (search = '') => {
-    if (!search.trim()) {
-      message.warning('请输入查询关键词');
-      return;
-    }
     setLoading(true);
     try {
       const params = new URLSearchParams();
@@ -53,7 +56,7 @@ export default function SerialPage() {
       const json = await res.json();
       if (json.success) {
         setData(json.data?.list || []);
-        if ((json.data?.list || []).length === 0) {
+        if (search.trim() && (json.data?.list || []).length === 0) {
           message.info('未找到相关记录');
         }
       }
@@ -69,6 +72,19 @@ export default function SerialPage() {
     { title: '商品编码', dataIndex: 'productCode', key: 'productCode', width: isMobile ? 100 : 120, render: (t: string) => <span style={{ fontFamily: 'monospace', fontSize: isMobile ? 12 : 14 }}>{t}</span> },
     { title: '商品名称', dataIndex: 'productName', key: 'productName', width: isMobile ? 120 : 180, ellipsis: true },
     { title: '序列号数量', key: 'serialCount', width: isMobile ? 80 : 100, render: (_: any, r: any) => <Tag color="blue">{r.serials?.length || 0}</Tag> },
+    {
+      title: '批次号', key: 'lots', width: isMobile ? 120 : 180,
+      render: (_: any, r: any) => {
+        const lots: string[] = r.lots || [];
+        if (!lots.length) return <Text type="secondary">-</Text>;
+        return (
+          <Space size={2} wrap>
+            {lots.slice(0, 2).map(l => <Tag key={l} color="geekblue">{l}</Tag>)}
+            {lots.length > 2 && <Tag>+{lots.length - 2}</Tag>}
+          </Space>
+        );
+      },
+    },
     ...(!isMobile ? [
       { title: '变动记录', key: 'txnCount', width: 100, render: (_: any, r: any) => <Tag color="green">{r.transactions?.length || 0}</Tag> },
       { title: '最新变动', key: 'lastTxn', width: 180, render: (_: any, r: any) => {

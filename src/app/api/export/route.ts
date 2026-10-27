@@ -147,20 +147,34 @@ export async function GET(request: NextRequest) {
       }
 
       case 'TRANSFER': {
+        // FIX-2026-1015：TransferOrder 上没有 fromWarehouse/toWarehouse 关系，
+        // 也没有 totalQty 字段，原写法直接触发 Prisma 校验错误（请求参数格式错误）。
+        // 改为按 fromWhId/toWhId 单独查仓库名，数量由明细求和。
         const orders = await prisma.transferOrder.findMany({
-          include: {
-            fromWarehouse: { select: { name: true } },
-            toWarehouse: { select: { name: true } },
-          },
+          include: { transferItems: { select: { quantity: true } } },
           orderBy: { createdAt: 'desc' },
         });
 
-        headers = ['调拨单号', '源仓库', '目标仓库', '总数量', '状态', '创建时间'];
+        const whIds = new Set<string>();
+        for (const o of orders) {
+          if (o.fromWhId) whIds.add(o.fromWhId.toString());
+          if (o.toWhId) whIds.add(o.toWhId.toString());
+        }
+        const whs = whIds.size
+          ? await prisma.warehouse.findMany({
+              where: { id: { in: Array.from(whIds).map((v) => BigInt(v)) } },
+              select: { id: true, name: true },
+            })
+          : [];
+        const whMap = new Map(whs.map((w) => [w.id.toString(), w.name]));
+
+        headers = ['调拨单号', '源仓库', '目标仓库', '品类数', '总数量', '状态', '创建时间'];
         rows = orders.map(o => [
           o.orderNo,
-          o.fromWarehouse?.name || '',
-          o.toWarehouse?.name || '',
-          Number(o.totalQty || 0),
+          whMap.get(o.fromWhId?.toString() || '') || '',
+          whMap.get(o.toWhId?.toString() || '') || '',
+          o.transferItems.length,
+          o.transferItems.reduce((s, i) => s + Number(i.quantity || 0), 0),
           o.status,
           o.createdAt ? new Date(o.createdAt).toLocaleString('zh-CN') : '',
         ]);
@@ -169,19 +183,25 @@ export async function GET(request: NextRequest) {
       }
 
       case 'STOCKTAKE': {
-        const orders = await prisma.stocktakeOrder.findMany({
+        // FIX-2026-1015：schema 里没有 StocktakeOrder 模型，实际叫 CountOrder。
+        // prisma.stocktakeOrder 是 undefined，调用即抛 TypeError（服务器内部错误）。
+        const orders = await prisma.countOrder.findMany({
           include: {
             warehouse: { select: { name: true } },
+            countItems: { select: { systemQty: true, countQty: true, diffQty: true } },
           },
           orderBy: { createdAt: 'desc' },
         });
 
-        headers = ['盘点单号', '仓库', '类型', '总数量', '状态', '创建时间'];
+        headers = ['盘点单号', '仓库', '类型', '盘点项数', '系统数量', '实盘数量', '差异数量', '状态', '创建时间'];
         rows = orders.map(o => [
           o.orderNo,
           o.warehouse?.name || '',
           o.type || '',
-          Number(o.totalQty || 0),
+          o.countItems.length,
+          o.countItems.reduce((s, i) => s + Number(i.systemQty || 0), 0),
+          o.countItems.reduce((s, i) => s + Number(i.countQty || 0), 0),
+          o.countItems.reduce((s, i) => s + Number(i.diffQty || 0), 0),
           o.status,
           o.createdAt ? new Date(o.createdAt).toLocaleString('zh-CN') : '',
         ]);
@@ -230,30 +250,45 @@ export async function GET(request: NextRequest) {
       }
 
       case 'TRANSACTION': {
+        // FIX-2026-1015：InventoryTransaction 只有 productId/warehouseId 标量，
+        // 没有 product/warehouse 关系，include 会触发 Prisma 校验错误。
+        // 改为先取流水，再批量查名称映射。
         const txns = await prisma.inventoryTransaction.findMany({
-          include: {
-            product: { select: { code: true, name: true } },
-            warehouse: { select: { name: true } },
-          },
-          orderBy: { createdAt: 'desc' },
+          orderBy: { txnTime: 'desc' },
           take: 10000,
         });
 
-        headers = ['类型', '单号', '商品编码', '商品名称', '仓库', '批次号', '数量', '成本价', '变动前', '变动后', '备注', '时间'];
-        rows = txns.map(t => [
-          t.txnType,
-          t.refNo || '',
-          t.product?.code || '',
-          t.product?.name || '',
-          t.warehouse?.name || '',
-          t.lotNumber || '',
-          Number(t.quantity || 0),
-          t.costPrice ? Number(t.costPrice).toFixed(2) : '',
-          Number(t.beforeQty || 0),
-          Number(t.afterQty || 0),
-          t.remark || '',
-          t.createdAt ? new Date(t.createdAt).toLocaleString('zh-CN') : '',
+        const pIds = Array.from(new Set(txns.map(t => t.productId.toString())));
+        const wIds = Array.from(new Set(txns.map(t => t.warehouseId.toString())));
+        const [prodList, whList] = await Promise.all([
+          pIds.length
+            ? prisma.product.findMany({ where: { id: { in: pIds.map(v => BigInt(v)) } }, select: { id: true, code: true, name: true } })
+            : Promise.resolve([] as any[]),
+          wIds.length
+            ? prisma.warehouse.findMany({ where: { id: { in: wIds.map(v => BigInt(v)) } }, select: { id: true, name: true } })
+            : Promise.resolve([] as any[]),
         ]);
+        const prodMap = new Map(prodList.map((p: any) => [p.id.toString(), p]));
+        const whNameMap = new Map(whList.map((w: any) => [w.id.toString(), w.name]));
+
+        headers = ['类型', '单号', '商品编码', '商品名称', '仓库', '批次号', '数量', '成本价', '变动前', '变动后', '备注', '时间'];
+        rows = txns.map(t => {
+          const p = prodMap.get(t.productId.toString());
+          return [
+            t.txnType,
+            t.refNo || '',
+            p?.code || '',
+            p?.name || '',
+            whNameMap.get(t.warehouseId.toString()) || '',
+            t.lotNumber || '',
+            Number(t.quantity || 0),
+            t.costPrice ? Number(t.costPrice).toFixed(2) : '',
+            Number(t.beforeQty || 0),
+            Number(t.afterQty || 0),
+            t.remark || '',
+            t.txnTime ? new Date(t.txnTime).toLocaleString('zh-CN') : '',
+          ];
+        });
         fileName = '库存流水';
         break;
       }

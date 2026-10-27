@@ -1,0 +1,18 @@
+[Unit]
+Description=Cloud Warehouse Inventory System (Next.js)
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/cloud-warehouse
+EnvironmentFile=/opt/cloud-warehouse/.env
+Environment=NODE_ENV=production
+# 只监听本机，由 nginx 对外提供服务
+ExecStart=/usr/bin/npm run start -- -H 127.0.0.1 -p 3000
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

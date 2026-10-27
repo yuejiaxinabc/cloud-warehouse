@@ -23,6 +23,18 @@ function createRedisClient(): Redis {
 
 export const redis = globalForRedis.redis ?? createRedisClient();
 
+// FIX-2026-1012：ioredis 在连接失败时会 emit('error')。
+// 没有监听器时 Node 会把未处理的 'error' 事件升级为未捕获异常，直接终止进程。
+// 这里挂一个显式监听，把故障降级为日志（rate-limit 会据此回退到进程内计数）。
+redis.on('error', (err: Error) => {
+  if (process.env.NODE_ENV !== 'test') {
+    console.warn('[redis] 连接异常，相关功能将降级:', err.message);
+  }
+});
+redis.on('end', () => {
+  console.warn('[redis] 连接已关闭');
+});
+
 if (process.env.NODE_ENV !== 'production') globalForRedis.redis = redis;
 
 /**

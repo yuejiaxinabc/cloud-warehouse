@@ -61,7 +61,9 @@ export async function GET(req: NextRequest) {
     }
 
     // 按货位汇总数量（同一货位可能有多个商品）
-    const stockByLocation = new Map<string, { quantity: number; items: { productName: string; productCode: string; productId: string; quantity: number; lotNumber: string | null }[] }>();
+    // 商品名/编码/ID 都允许 null：货位明细可能指向已删除商品，兜底来源也可能缺字段
+    type StockItem = { productName: string | null; productCode: string | null; productId: string | null; quantity: number; lotNumber: string | null };
+    const stockByLocation = new Map<string, { quantity: number; items: StockItem[] }>();
     for (const ls of locationStocks) {
       const key = ls.locationId.toString();
       const qty = Number(ls.quantity || 0);
@@ -75,6 +77,38 @@ export async function GET(req: NextRequest) {
         lotNumber: ls.lotNumber || null,
       });
       stockByLocation.set(key, entry);
+    }
+
+    // ===== 兜底（FIX-2026-1013）=====
+    // 历史上 stock-in 只写 inventory 不写 location_stocks，导致货架地图一片空白：
+    // 货在库里、位在图上，两边对不上。这里对没有货位明细的库存按
+    // inventory.location_id 兜底补出来，保证「有货就一定有货架」。
+    const inventoriesWithLocation = await prisma.inventory.findMany({
+      where: {
+        warehouseId: BigInt(warehouseId),
+        locationId: { not: null },
+      },
+      include: { product: { select: { name: true, code: true } } },
+    });
+    for (const inv of inventoriesWithLocation) {
+      const locId = inv.locationId!.toString();
+      const entry = stockByLocation.get(locId);
+      const qty = Number(inv.onHand || 0);
+      if (qty <= 0) continue;
+
+      const already = entry?.items.some(it => it.productId === inv.productId.toString());
+      if (already) continue;   // 已有货位明细，不重复计
+
+      const target = entry || { quantity: 0, items: [] };
+      target.quantity += qty;
+      target.items.push({
+        productName: (inv.product?.name ?? null) as any,
+        productCode: (inv.product?.code ?? null) as any,
+        productId: inv.productId.toString(),
+        quantity: qty,
+        lotNumber: null as any,
+      });
+      stockByLocation.set(locId, target);
     }
 
     // 构建库位数据

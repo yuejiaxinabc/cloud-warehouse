@@ -1,8 +1,10 @@
 import { prisma } from '@/lib/prisma';
 import { generateOrderNo } from '@/lib/utils';
-import { NotFoundError, InvalidStateError } from '@/lib/errors';
+import { NotFoundError, InvalidStateError, AppError } from '@/lib/errors';
 import { ORDER_STATUS } from '@/lib/constants';
 import { Prisma } from '@prisma/client';
+import { syncLocationStock, assertLocationInWarehouse } from '@/lib/location-binding';
+import { assertLocationAvailableFor } from '@/lib/location-occupancy';
 
 /**
  * 入库服务
@@ -208,16 +210,33 @@ export class StockInService {
         }
 
         // 2a. 更新/创建库存余额
-        const existingInv = await tx.inventory.findUnique({
+        // FIX-2026-1013：旧数据的 sku_variant_id 是 NULL，新逻辑传 0，
+        // findUnique 匹配不上就会给同一商品再插一行库存 ——
+        // 结果货架上同一个商品出现两次。这里用 OR 兼容两种取值。
+        const existingInv = await tx.inventory.findFirst({
           where: {
-            productId_warehouseId_skuVariantId: {
-              productId: item.productId,
-              warehouseId: order.warehouseId,
-              skuVariantId: item.skuVariantId || 0,
-            },
+            productId: item.productId,
+            warehouseId: order.warehouseId,
+            OR: [
+              { skuVariantId: item.skuVariantId || 0 },
+              { skuVariantId: null },
+            ],
           },
+          orderBy: { id: 'asc' },
         });
 
+        // FIX-2026-1013：入库必须落到货位。原来只写 inventory，
+        // 不写 locationId 也不写 location_stocks，直接导致货架地图空白。
+        const rawLocationId = (item as any).locationId;
+        if (!rawLocationId) {
+          throw new AppError('入库明细缺少货位：商品必须绑定四段货位（区-排-列-位），请选择货位后重新提交', 400);
+        }
+        const boundLocationId = BigInt(rawLocationId);
+        await assertLocationInWarehouse(tx, boundLocationId, order.warehouseId);
+        // 一个货位只能放同一种商品，换品种必须换货位
+        await assertLocationAvailableFor(tx, { locationId: boundLocationId, productId: item.productId });
+
+        let invId: bigint;
         if (existingInv) {
           // 移动加权平均法计算新成本
           const oldQty = Number(existingInv.onHand);
@@ -232,21 +251,35 @@ export class StockInService {
               onHand: { increment: qty },
               avgCost: new Prisma.Decimal(newAvgCost),
               version: { increment: 1 },
+              locationId: boundLocationId,
             },
           });
+          invId = existingInv.id;
         } else {
-          await tx.inventory.create({
+          const created = await tx.inventory.create({
             data: {
               productId: item.productId,
               warehouseId: order.warehouseId,
               skuVariantId: item.skuVariantId || 0,
+              locationId: boundLocationId,
               onHand: qty,
               locked: 0,
               avgCost: costPrice > 0 ? new Prisma.Decimal(costPrice) : null,
               version: 0,
             },
           });
+          invId = created.id;
         }
+
+        // 货位明细：货架地图的唯一数据源，必须同步写
+        await syncLocationStock(tx, {
+          inventoryId: invId,
+          productId: item.productId,
+          warehouseId: order.warehouseId,
+          locationId: boundLocationId,
+          quantity: qty,
+          lotNumber: lotNumber || null,
+        });
 
         // 2b. 批次库存处理
         if (item.lotAllocations.length > 0) {

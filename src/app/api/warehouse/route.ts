@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth';
 import { prisma } from "@/lib/prisma";
 import { serializeBigInt } from "@/lib/serialize";
 import { requireAuth } from '@/lib/auth-guard';
+import { ensureShelves } from '@/lib/shelf-init';
 
 export async function GET(req: NextRequest) {
     await requireAuth(req);
@@ -70,59 +71,10 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      // 2. 创建默认货架 A-M（13个）
-      const shelfLetters = 'ABCDEFGHIJKLM'.split('');
-      for (const letter of shelfLetters) {
-        const zone = await tx.zone.create({
-          data: {
-            name: `${letter}货架`,
-            code: letter,
-            warehouseId: warehouse.id,
-            type: 'storage',
-            status: 1,
-          },
-        });
-
-        // 3. 为每个货架创建 10列 × 10层 = 100 个货位
-        // 每个货位的编码如 A-1-1，内部有10个货位（A-1-1-1 到 A-1-1-10）
-        const locations = [];
-        for (let col = 1; col <= 10; col++) {
-          for (let row = 1; row <= 10; row++) {
-            locations.push({
-              name: `${letter}-${col}-${row}`,
-              code: `${letter}-${col}-${row}`,
-              zoneId: zone.id,
-              type: 'shelf' as const,
-              capacity: 10, // 每个货位10个货位
-              status: 1,
-            });
-          }
-        }
-        
-        // 批量创建货位
-        await tx.location.createMany({
-          data: locations,
-        });
-
-        // 4. 为每个货位创建10个小货位（实体化，支持单独停用）
-        const createdLocations = await tx.location.findMany({
-          where: { zoneId: zone.id },
-          orderBy: { id: "asc" },
-        });
-        const boxes: any[] = [];
-        for (const loc of createdLocations) {
-          for (let b = 1; b <= 10; b++) {
-            boxes.push({
-              locationId: loc.id,
-              code: `${loc.code}-${b}`,
-              status: 1,
-            });
-          }
-        }
-        await tx.box.createMany({
-          data: boxes,
-        });
-      }
+      // 2. 创建完整货架：A-Z 共 26 个，每个 10列 × 10位 = 100 个货位
+      //    FIX-2026-1014：原来只建到 A-M（13 个），且编码是补零前的 A-1-1，
+      //    与四段规则冲突，现在统一走 ensureShelves。
+      await ensureShelves(tx, warehouse.id);
 
       return warehouse;
     });

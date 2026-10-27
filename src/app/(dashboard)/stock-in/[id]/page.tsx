@@ -94,6 +94,7 @@ export default function StockInDetailPage() {
     }
     const items = order?.inboundItems || order?.items || [];
     const fields = items.map((item: any) => ({
+      itemId: item.id,
       productId: Number(item.productId || item.product?.id),
       productName: item.product?.name || '-',
       quantity: Number(item.quantity || 0),
@@ -102,16 +103,30 @@ export default function StockInDetailPage() {
     }));
     locationForm.setFieldsValue({ items: fields, commonBox: undefined });
     setLocationModalOpen(true);
+    // 预加载货位，避免下拉空着
+    if (whId) loadLocations(Number(whId));
+  };
+
+  const [locations, setLocations] = useState<any[]>([]);
+  const loadLocations = async (warehouseId?: number) => {
+    if (!warehouseId) { setLocations([]); return; }
+    try {
+      const res = await fetch(`/api/warehouse/locations?warehouseId=${warehouseId}`, { cache: 'no-store' });
+      const j = await res.json();
+      if (j.success) setLocations(j.data || []);
+    } catch { setLocations([]); }
   };
 
   const handleSameBox = () => {
-    const commonBox = locationForm.getFieldValue('commonBox');
-    if (!commonBox) { message.warning('请先选择统一货位'); return; }
-    const box = boxes.find((b: any) => b.id === commonBox);
-    if (!box) return;
+    // FIX-2026-1020：货位来源改成 locations。
+    // 原来这里查 boxes 表，而系统已不再生成 box 记录（表里 0 条），
+    // 所以下拉永远是空的。
+    const commonLocation = locationForm.getFieldValue('commonBox');
+    if (!commonLocation) { message.warning('请先选择统一货位'); return; }
     const items = locationForm.getFieldValue('items') || [];
-    const updated = items.map((item: any) => ({ ...item, boxId: commonBox, locationId: box.locationId }));
+    const updated = items.map((item: any) => ({ ...item, boxId: undefined, locationId: commonLocation }));
     locationForm.setFieldsValue({ items: updated });
+    message.success('已应用到所有商品');
   };
 
   const fetchPriceHistory = async (productId: number) => {
@@ -136,6 +151,29 @@ export default function StockInDetailPage() {
 
       setAssigning(true);
       let successCount = 0;
+
+      // FIX-2026-1019：草稿单是「给明细绑货位」，已过账单是「把库存放到货位上」，
+      // 两条路径不能混用。
+      if (order.status === 'DRAFT') {
+        const res = await fetch(`/api/stock-in/${params.id}/location`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            items: toAssign.map((i: any) => ({ itemId: i.itemId, locationId: i.locationId })),
+          }),
+        });
+        const resData = await res.json();
+        setAssigning(false);
+        if (resData.success) {
+          message.success(`已为 ${resData.data?.updated || toAssign.length} 个商品绑定货位，现在可以过账了`);
+          setLocationModalOpen(false);
+          fetchOrder();
+        } else {
+          message.error(resData.error || '绑定货位失败');
+        }
+        return;
+      }
+
       for (const item of toAssign) {
         try {
           const res = await fetch('/api/location-stocks', {
@@ -203,7 +241,8 @@ export default function StockInDetailPage() {
           {order.status === 'DRAFT' && (
             <Button type="primary" icon={<CheckCircleOutlined />} onClick={handlePost} loading={posting}>过账</Button>
           )}
-          {order.status === 'POSTED' && (
+          {/* FIX-2026-1019：草稿单也必须能分配货位，否则永远过不了账 */}
+          {(order.status === 'DRAFT' || order.status === 'POSTED') && (
             <Button type="primary" icon={<EnvironmentOutlined />} onClick={openLocationModal}>放置货位</Button>
           )}
         </Space>
@@ -233,21 +272,28 @@ export default function StockInDetailPage() {
           <span>仓库：</span>
           <Select style={{ flex: 1 }} placeholder="选择仓库" allowClear
             value={locWarehouseId}
-            onChange={(v) => { setLocWarehouseId(v); loadBoxes(v); }}>
-            {warehouses.map((wh: any) => <Select.Option key={wh.id} value={wh.id}>{wh.name}</Select.Option>)}
+            onChange={(v) => { setLocWarehouseId(v); loadBoxes(v); loadLocations(v); }}>
+            {/* FIX-2026-1020：接口返回的 id 是字符串，而 value 存的是 number，
+                严格相等匹配不上就会把「1」直接显示出来 */}
+            {warehouses.map((wh: any) => <Select.Option key={wh.id} value={Number(wh.id)}>{wh.name}</Select.Option>)}
           </Select>
         </div>
         <div style={{ marginBottom: 16, display: 'flex', gap: 8, alignItems: 'center' }}>
           <span>统一货位：</span>
-          <Select style={{ flex: 1 }} placeholder="输入4段库位编码（如A-1-1-1）" showSearch allowClear
+          <Select style={{ flex: 1 }} placeholder="搜索货位编码（如 A-01-01-01）" showSearch allowClear
             optionFilterProp="children"
             showArrow={true}
+            notFoundContent={locWarehouseId ? '该仓库暂无货位' : '请先选择仓库'}
             filterOption={(input, option) => {
               const label = option?.children?.toString() || '';
               return label.toLowerCase().includes(input.toLowerCase());
             }}
             onChange={(v) => locationForm.setFieldsValue({ commonBox: v })}>
-            {boxes.map((box: any) => <Select.Option key={box.id} value={box.id}>{box.code}</Select.Option>)}
+            {locations.filter((l: any) => l.status === 1).map((l: any) => (
+              <Select.Option key={l.id} value={l.id} disabled={!!l.occupiedBy}>
+                {l.code}{l.occupiedBy ? `（已放：${l.occupiedBy.productName}）` : '（空）'}
+              </Select.Option>
+            ))}
           </Select>
           <Button onClick={handleSameBox}>同货位</Button>
         </div>

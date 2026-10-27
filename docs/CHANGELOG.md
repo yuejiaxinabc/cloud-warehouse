@@ -7,6 +7,29 @@
 
 ## 版本历史
 
+### v1.0.2（2026-10-27 · 安全复检 + 货位闭环）
+
+> 基线 v1.0.1（`5670a1c`）。本次以**服务器实际运行代码**为准（29 个文件变更，`+1126 / −629`），
+> 已部署上线（systemd `cloud-warehouse` active，BUILD_ID `v7cyDypXcFQYmpjdAoBX-`）。
+> 逐项说明见 [`docs/UPDATE-2026-10-27.md`](UPDATE-2026-10-27.md)。
+
+- ✅ **FIX-2026-1012（P0）** 安全复检九项：验证码改为 `authorize()` 内一次性消费（原存储写在 route 内，`authorize()` 访问不到 → 直接打 callback 可完全绕过）；CSRF 同源基准由可伪造的 `X-Forwarded-Host` 改为请求真实 `Host`；上传改按**文件头魔数**嗅探 + 扩展名白名单 + `crypto` 随机名（原按客户端 `Content-Type`/后缀判断，可上传 `.html` 造成存储型 XSS）；`NEXTAUTH_SECRET` 弱密钥全站 503（fail-closed）；API Token 改 `crypto.randomBytes` + fail-closed + `timingSafeEqual`；登录改 IP+账号双维度限速并统一错误文案（消除用户名枚举与「打 5 次锁死管理员」DoS）；会话 Cookie 显式声明安全属性；`hasRole()` 大小写不敏感；补 ioredis `error` 监听；关闭 `X-Powered-By`
+- ✅ **FIX-2026-1013（P0）** 货位闭环：`InboundItem.locationId` 落库，入库过账必须带合法四段货位（`区-排-列-位`），同步写 `inventory.locationId` 与 `location_stocks`；新增 `location-binding` / `location-occupancy`；货架地图对历史数据按 `inventory.location_id` 兜底，修复「库存有货、货架地图空白」
+- ✅ **FIX-2026-1014** 新建仓库统一生成 A–Z 共 26 个货架、每架 10×10=100 个货位（原仅 A–M 且编码不补零，与四段规则冲突）；新增幂等补齐接口 `POST /api/warehouse/shelves/init`
+- ✅ **FIX-2026-1015（P0）** 数据导出三处故障：盘点记录 `prisma.stocktakeOrder` 模型不存在（应为 `countOrder`）→ 500；调拨 / 库存流水引用 schema 中不存在的关系与字段 → 400，均改为外键/Map 映射
+- ✅ **FIX-2026-1016** 新增「库存分析」页 `/inventory/analysis`（账实对账 / 呆滞库龄 / ABC 分类 / 补货建议四类）；扫码入库、扫码出库点击即拉起摄像头
+- ✅ **FIX-2026-1017** 货架地图不再给货位编码追加 `-1/-2` 序号（四段变五段），一个货位就是一条 `Location`
+- ✅ **FIX-2026-1018** 货架地图网格改为按「排-列-位」正向落位，空位同样铺满对齐
+- ✅ **FIX-2026-1019** 新增草稿入库单绑货位接口 `POST /api/stock-in/[id]/location`，解除「过账要求先有货位、货位只能过账后放置」的死锁
+- ✅ **FIX-2026-1020** 统一货位选择改读 `locations`（原读已空的 `boxes` 表，下拉永远为空）
+- ✅ **FIX-2026-1021** 序列号追踪无关键词时返回全部商品并汇总批次号（原来直接返回空数组，页面空白）
+- ✅ **FIX-2026-1022** 全站响应补 `Cache-Control: no-store`（Next 默认长缓存导致入库后仍显示旧数据）
+- ✅ **FIX-2026-1023** 货位独占校验：一个货位只能放同一种商品；货位接口返回 `occupiedBy` / `isEmpty`
+- ✅ **FEAT-2026-1024** 商品导入导出：`/products/io` + 模板/导出/导入/元信息四个接口，模板按「有无仓库」动态增减「仓库」「货位编码」列
+- ✅ **DATA-2026-1025** 种子脚本改为幂等 `upsert`，仅初始化组织/权限/角色/账号，不含任何业务数据
+- 🔴 **运维遗留**：`NEXTAUTH_SECRET` 曾随 `..env.vNsxxG4DI5` 提交进公开仓库，**必须轮换并清理 git 历史**（代码只能拦「继续用弱密钥」，拦不住「已泄露」）
+- 🔶 未处理：80 端口未强制跳 HTTPS；`/api/inventory`、`/api/warehouse/structure` 缺内部 `requireAuth`；`ignoreBuildErrors` 仍为 true
+
 ### v1.0.1（2026-10-11 · 安全加固版）
 
 安全审计后的集中修复版本，全部改动已部署上线并复测通过：

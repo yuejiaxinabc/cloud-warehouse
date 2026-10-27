@@ -27,7 +27,39 @@ export async function GET(req: NextRequest) {
       orderBy: { code: "asc" },
     });
 
-    return NextResponse.json(serializeBigInt({ success: true, data: locations }));
+    // FIX-2026-1023：附带每个货位当前占用的商品，前端据此过滤下拉，
+    // 避免用户选到「已被别的商品占用」的货位。
+    const stocks = await prisma.locationStock.findMany({
+      where: { locationId: { in: locations.map((l) => l.id) }, quantity: { gt: 0 } },
+      select: {
+        locationId: true,
+        productId: true,
+        product: { select: { code: true, name: true } },
+      },
+    });
+    const occ = new Map<string, { productId: string; productCode: string; productName: string }>();
+    for (const s of stocks) {
+      const k = s.locationId.toString();
+      if (!occ.has(k)) {
+        occ.set(k, {
+          productId: s.productId.toString(),
+          productCode: s.product?.code || '',
+          productName: s.product?.name || '',
+        });
+      }
+    }
+
+    const data = locations.map((l) => {
+      const o = occ.get(l.id.toString());
+      return {
+        ...l,
+        occupiedBy: o || null,
+        // true = 空货位，任何商品都能放
+        isEmpty: !o,
+      };
+    });
+
+    return NextResponse.json(serializeBigInt({ success: true, data }));
   } catch (error: any) {
     return NextResponse.json(
       serializeBigInt({ success: false, error: error.message }),

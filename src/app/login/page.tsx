@@ -60,22 +60,14 @@ export default function LoginPage() {
 
     setLoading(true);
     try {
-      // 服务端一次性校验验证码（FIX-2026-1002）：通过后才执行登录
-      const capRes = await fetch("/api/auth/captcha", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: captchaToken, answer: captchaInput.trim() }),
-      });
-      const capData = await capRes.json().catch(() => ({ success: false, error: "验证码校验失败" }));
-      if (!capData.success) {
-        message.error(capData.error || "验证码错误，请重新输入");
-        refreshCaptcha();
-        return;
-      }
-
+      // FIX-2026-1012：验证码不再由前端预验（那样直接打 callback 就能绕过）。
+      // 现在把 captchaToken / captchaAnswer 一并交给 NextAuth，由服务端
+      // authorize() 一次性消费，绕过前端也拿不到登录能力。
       const result = await signIn("credentials", {
         username: values.username.trim(),
         password: values.password,
+        captchaToken,
+        captchaAnswer: captchaInput.trim(),
         redirect: false,
       });
 

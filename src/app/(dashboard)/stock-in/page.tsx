@@ -15,6 +15,16 @@ export default function StockInPage() {
   const [statusFilter, setStatusFilter] = useState<string>();
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [scanModalOpen, setScanModalOpen] = useState(false);
+  // FIX-2026-1019：入库明细必须选货位才能过账，这里加载当前仓库的可用货位
+  const [locations, setLocations] = useState<any[]>([]);
+  const loadLocations = async (warehouseId?: number) => {
+    if (!warehouseId) { setLocations([]); return; }
+    try {
+      const res = await fetch(`/api/warehouse/locations?warehouseId=${warehouseId}`, { cache: 'no-store' });
+      const j = await res.json();
+      if (j.success) setLocations(j.data || []);
+    } catch { setLocations([]); }
+  };
   const [showCamera, setShowCamera] = useState(false);
   const scanInputRef = useRef<any>(null);
   const [scanResult, setScanResult] = useState<any>(null);
@@ -142,7 +152,7 @@ export default function StockInPage() {
           type: "purchase",
           warehouseId: values.warehouseId,
           supplierId: values.supplierId || null,
-          items: [{ productId: scanResult.id, planQty: values.quantity, unitPrice: values.unitPrice }],
+          items: [{ productId: scanResult.id, planQty: values.quantity, unitPrice: values.unitPrice, locationId: values.locationId }],
         }),
       });
       const data = await res.json();
@@ -263,7 +273,16 @@ export default function StockInPage() {
             </Select>
           </Space>
           <Space direction={isMobile ? "vertical" : "horizontal"} style={{ width: isMobile ? "100%" : "auto" }}>
-            <Button icon={<ScanOutlined />} onClick={() => { setScanModalOpen(true); setTimeout(() => scanInputRef.current?.focus(), 300); }} block={isMobile}>扫码入库</Button>
+            <Button
+              icon={<ScanOutlined />}
+              onClick={() => {
+                setScanModalOpen(true);
+                // FIX-2026-1016：点扫码直接拉起摄像头，不再需要二次点击「打开摄像头」
+                setShowCamera(true);
+                setTimeout(() => scanInputRef.current?.focus(), 300);
+              }}
+              block={isMobile}
+            >扫码入库</Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); setCreateModalOpen(true); }} block={isMobile}>手动创建</Button>
           </Space>
         </div>
@@ -271,7 +290,7 @@ export default function StockInPage() {
       </Card>
 
       {/* 扫码入库弹窗 */}
-      <Modal title="扫码入库" open={scanModalOpen} onCancel={() => { setScanModalOpen(false); setScanResult(null); scanForm.resetFields(); }} width={isMobile ? "95%" : 600}
+      <Modal title="扫码入库" open={scanModalOpen} onCancel={() => { setScanModalOpen(false); setShowCamera(false); setScanResult(null); scanForm.resetFields(); }} width={isMobile ? "95%" : 600}
         footer={[
           <Button key="cancel" onClick={() => { setScanModalOpen(false); setScanResult(null); }}>取消</Button>,
           <Button key="submit" type="primary" onClick={handleScanSubmit}>确认入库</Button>,
@@ -301,8 +320,17 @@ export default function StockInPage() {
           )}
           <Row gutter={isMobile ? 8 : 16}>
             <Col span={isMobile ? 24 : 12}>
-              <Form.Item name="warehouseId" label="入库仓库" rules={[{ required: true, message: "请选择仓库" }]}>
-                <Select placeholder="选择仓库">
+              <Form.Item name="warehouseId" label="入库仓库" rules={[{ required: true, message: "请选择仓库" }]}
+                extra="切换仓库后会重新加载该仓库的货位">
+                <Select
+                  placeholder="选择仓库"
+                  onChange={(v) => {
+                    loadLocations(v);
+                    // 换仓库后旧货位失效，清掉明细里的选择
+                    const items = form.getFieldValue('items') || [];
+                    form.setFieldsValue({ items: items.map((it: any) => ({ ...it, locationId: undefined })) });
+                  }}
+                >
                   {warehouses.map((w: any) => <Option key={w.id} value={w.id}>{w.name}</Option>)}
                 </Select>
               </Form.Item>
@@ -324,6 +352,29 @@ export default function StockInPage() {
             <Col span={isMobile ? 24 : 12}>
               <Form.Item name="unitPrice" label="单价">
                 <InputNumber min={0} precision={2} placeholder="单价" style={{ width: "100%" }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={isMobile ? 8 : 16}>
+            <Col span={24}>
+              {/* FIX-2026-1019：入库必须指定货位，否则过账会被拒绝 */}
+              <Form.Item
+                name="locationId"
+                label="放置货位"
+                rules={[{ required: true, message: "请选择货位" }]}
+                extra="必填。决定这批货落到哪个货架位，可在货架地图查看货位编码"
+              >
+                <Select
+                  placeholder="选择货位"
+                  showSearch
+                  optionFilterProp="label"
+                  notFoundContent="该仓库暂无可用货位"
+                  options={locations.filter((l: any) => l.status === 1).map((l: any) => ({
+                    value: l.id,
+                    label: l.code + (l.occupiedBy ? `（已放：${l.occupiedBy.productName}）` : '（空）'),
+                    disabled: !!l.occupiedBy,
+                  }))}
+                />
               </Form.Item>
             </Col>
           </Row>
@@ -381,12 +432,40 @@ export default function StockInPage() {
                           />
                         </Form.Item>
                       </Col>
-                      <Col span={isMobile ? 12 : 6}>
+                      <Col span={isMobile ? 12 : 5}>
                         <Form.Item {...restField} name={[name, "planQty"]} rules={[{ required: true, message: "请输入数量" }]}>
                           <InputNumber min={1} placeholder="数量" style={{ width: "100%" }} />
                         </Form.Item>
                       </Col>
-                      <Col span={isMobile ? 10 : 6}>
+                      <Col span={isMobile ? 12 : 5}>
+                        <Form.Item
+                          {...restField}
+                          name={[name, "locationId"]}
+                          rules={[{ required: true, message: "请选择货位" }]}
+                        >
+                          <Select
+                            placeholder="货位（必填）"
+                            showSearch
+                            optionFilterProp="label"
+                            // FIX-2026-1020：展开时按当前仓库兜底加载，
+                            // 避免没触发过仓库 onChange 时下拉为空
+                            onDropdownVisibleChange={(open) => {
+                              if (open && locations.length === 0) {
+                                loadLocations(form.getFieldValue('warehouseId'));
+                              }
+                            }}
+                            notFoundContent="该仓库暂无可用货位"
+                            options={locations
+                              .filter((l: any) => l.status === 1)
+                              .map((l: any) => ({
+                                value: l.id,
+                                label: l.code + (l.occupiedBy ? `（已放：${l.occupiedBy.productName}）` : '（空）'),
+                                disabled: !!l.occupiedBy,
+                              }))}
+                          />
+                        </Form.Item>
+                      </Col>
+                      <Col span={isMobile ? 8 : 4}>
                         <Form.Item {...restField} name={[name, "unitPrice"]}>
                           <InputNumber min={0} precision={2} placeholder="单价" style={{ width: "100%" }} />
                         </Form.Item>

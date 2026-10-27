@@ -23,10 +23,12 @@ const OPERATOR_PATHS = ["/", "/stock-out", "/inventory", "/stocktake", "/bom", "
 const menuItems: MenuProps["items"] = [
   { key: "/", icon: <DashboardOutlined />, label: "工作台" },
   { key: "/products", icon: <ShoppingOutlined />, label: "商品管理" },
+  { key: "/products/io", icon: <FileExcelOutlined />, label: "商品导入导出" },
   { key: "/purchase-requests", icon: <ShoppingCartOutlined />, label: "购买申请" },
   { key: "/stock-in", icon: <ImportOutlined />, label: "扫码入库" },
   { key: "/stock-out", icon: <ExportOutlined />, label: "扫码出库" },
   { key: "/inventory", icon: <DatabaseOutlined />, label: "库存查询" },
+  { key: "/inventory/analysis", icon: <BarChartOutlined />, label: "库存分析" },
   { key: "/stocktake", icon: <ScanOutlined />, label: "盘点管理" },
   { key: "/transfers", icon: <SwapOutlined />, label: "调拨管理" },
   { key: "/warehouse", icon: <HomeOutlined />, label: "仓库管理" },
