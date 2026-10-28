@@ -11,6 +11,7 @@ import {
   EditOutlined, DeleteOutlined, KeyOutlined, PlusOutlined, SendOutlined
 } from '@ant-design/icons';
 import { useRouter } from 'next/navigation';
+import MailSettings from '@/components/settings/MailSettings';
 
 const { TabPane } = Tabs;
 
@@ -560,6 +561,7 @@ const SettingsPage: React.FC = () => {
       { key: 'users', label: '👥 用户管理', children: <UsersTab /> },
       { key: 'roles', label: '🎭 角色管理', children: <RolesTab /> },
       { key: 'system', label: <span><SettingOutlined /> 系统设置</span>, children: <SystemTab /> },
+      { key: 'mail', label: <span><MailOutlined /> 邮件与订阅</span>, children: <MailSettings /> },
     ] : []),
   ];
 

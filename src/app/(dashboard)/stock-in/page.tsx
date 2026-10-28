@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
-import { Card, Table, Button, Space, Input, Select, Tag, Row, Col, Modal, Form, message, Typography, Descriptions, InputNumber, Alert } from "antd";
+import { Card, Table, Button, Space, Input, Select, Tag, Row, Col, Modal, Form, message, Typography, Descriptions, InputNumber, Alert, DatePicker } from "antd";
 import { useRouter } from "next/navigation";
 import { PlusOutlined, SearchOutlined, CheckCircleOutlined, ScanOutlined, PrinterOutlined, EyeOutlined, CameraOutlined } from "@ant-design/icons";
 import dynamic from "next/dynamic";
@@ -152,7 +152,14 @@ export default function StockInPage() {
           type: "purchase",
           warehouseId: values.warehouseId,
           supplierId: values.supplierId || null,
-          items: [{ productId: scanResult.id, planQty: values.quantity, unitPrice: values.unitPrice, locationId: values.locationId }],
+          items: [{
+            productId: scanResult.id,
+            planQty: values.quantity,
+            unitPrice: values.unitPrice,
+            locationId: values.locationId,
+            batchNo: values.batchNo || null,
+            producedAt: values.producedAt ? values.producedAt.toISOString() : null,
+          }],
         }),
       });
       const data = await res.json();
@@ -352,6 +359,27 @@ export default function StockInPage() {
             <Col span={isMobile ? 24 : 12}>
               <Form.Item name="unitPrice" label="单价">
                 <InputNumber min={0} precision={2} placeholder="单价" style={{ width: "100%" }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={isMobile ? 8 : 16}>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item
+                name="batchNo"
+                label="批次号"
+                rules={scanResult?.shelfLifeDays ? [{ required: true, message: "该商品有保质期，批次号必填" }] : []}
+                extra={scanResult?.shelfLifeDays ? `该商品保质期 ${scanResult.shelfLifeDays} 天，到期日按生产日期自动推算` : "有保质期的商品必填"}
+              >
+                <Input placeholder="如 LOT-20261028-001" allowClear />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item
+                name="producedAt"
+                label="生产日期"
+                rules={scanResult?.shelfLifeDays ? [{ required: true, message: "该商品有保质期，生产日期必填" }] : []}
+              >
+                <DatePicker style={{ width: "100%" }} placeholder="选择生产日期" />
               </Form.Item>
             </Col>
           </Row>

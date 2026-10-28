@@ -13,14 +13,14 @@ import {
   QrcodeOutlined, TagsOutlined, FileExcelOutlined, ClusterOutlined,
   DollarOutlined, FileTextOutlined, ShopOutlined, TeamOutlined,
   MenuOutlined, AppstoreOutlined, ShoppingCartOutlined, PieChartOutlined,
-  ScanOutlined, DownOutlined,
+  ScanOutlined, DownOutlined, RocketOutlined, FundProjectionScreenOutlined, DeleteOutlined, SafetyOutlined, ExperimentOutlined,
 } from "@ant-design/icons";
 import { LogoMark } from "@/components/brand/Logo";
 
 const { Sider, Header, Content } = Layout;
 const { Text } = Typography;
 
-const APP_VERSION = "1.1.1";
+const APP_VERSION = "1.2.0";
 const COLLAPSE_KEY = "yc.sider.collapsed";
 
 /** 分组菜单：默认折叠，点开才展开，避免一屏堆 23 个入口 */
@@ -64,6 +64,7 @@ const NAV: NavNode[] = [
     children: [
       { key: "/inventory", icon: <DatabaseOutlined />, label: "库存查询" },
       { key: "/inventory/analysis", icon: <BarChartOutlined />, label: "库存分析" },
+      { key: "/inventory/lots", icon: <ExperimentOutlined />, label: "批次与效期" },
       { key: "/shelf-map", icon: <AppstoreOutlined />, label: "货架地图" },
       { key: "/warehouse", icon: <HomeOutlined />, label: "仓库管理" },
       { key: "/alerts", icon: <AlertOutlined />, label: "预警中心" },
@@ -79,6 +80,7 @@ const NAV: NavNode[] = [
       { key: "/labels", icon: <TagsOutlined />, label: "条码打印" },
       { key: "/export", icon: <FileExcelOutlined />, label: "Excel 导出" },
       { key: "/cost", icon: <DollarOutlined />, label: "成本核算" },
+      { key: "/screen", icon: <FundProjectionScreenOutlined />, label: "现场大屏" },
     ],
   },
   {
@@ -87,6 +89,9 @@ const NAV: NavNode[] = [
     label: "系统",
     children: [
       { key: "/logs", icon: <FileTextOutlined />, label: "操作日志" },
+      { key: "/setup", icon: <RocketOutlined />, label: "初始化向导" },
+      { key: "/trash", icon: <DeleteOutlined />, label: "回收站" },
+      { key: "/security", icon: <SafetyOutlined />, label: "安全与集成" },
       { key: "/settings", icon: <SettingOutlined />, label: "系统设置" },
     ],
   },

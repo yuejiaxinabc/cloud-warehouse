@@ -4,6 +4,7 @@ export const dynamic = 'force-dynamic';
 
 import React, { useState, useEffect } from 'react';
 import { Card, Descriptions, Table, Tag, Typography, Button, Space, message, Spin } from 'antd';
+import AttachmentPanel from '@/components/ui/AttachmentPanel';
 import { PrinterOutlined, ArrowLeftOutlined } from '@ant-design/icons';
 import { useRouter, useParams } from 'next/navigation';
 
@@ -175,6 +176,11 @@ export default function StockOutDetailPage() {
 
       <Card title="出库明细">
         <Table columns={itemColumns} dataSource={items} rowKey="id" pagination={false} size="small" scroll={{ x: 900 }} />
+      </Card>
+
+      {/* v1.3 单据附件：签收回单 */}
+      <Card title="单据附件" style={{ marginTop: 16 }}>
+        <AttachmentPanel module="outbound" refId={String(id)} />
       </Card>
     </div>
   );

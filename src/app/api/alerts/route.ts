@@ -93,6 +93,46 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // 4. 批次临期 / 过期预警（v1.2：批次与效期一等公民）
+    const EXPIRY_WARN_DAYS = 30;
+    const nowTs = Date.now();
+    const expiryLots = await prisma.inventoryLot.findMany({
+      where: { expiredAt: { not: null }, quantity: { gt: 0 }, status: { not: 2 } },
+      include: {
+        product: { select: { code: true, name: true, category: { select: { name: true } } } },
+        warehouse: { select: { name: true } },
+      },
+      orderBy: { expiredAt: 'asc' },
+      take: 200,
+    });
+
+    for (const lot of expiryLots) {
+      if (!lot.expiredAt) continue;
+      const daysLeft = Math.ceil((new Date(lot.expiredAt).getTime() - nowTs) / 86400000);
+      if (daysLeft > EXPIRY_WARN_DAYS) continue;
+
+      const expired = daysLeft < 0;
+      alerts.push({
+        id: `expiry-${lot.id}`,
+        level: expired ? 'CRITICAL' : daysLeft <= 7 ? 'CRITICAL' : 'WARNING',
+        title: expired ? '批次已过期' : '批次临期',
+        content: `${lot.product?.name}（${lot.product?.code}）批次 ${lot.lotNumber} 数量 ${Number(lot.quantity)}，` +
+          (expired ? `已过期 ${Math.abs(daysLeft)} 天，请隔离处理` : `还有 ${daysLeft} 天到期（${new Date(lot.expiredAt).toLocaleDateString('zh-CN')}）`) +
+          `｜仓库：${lot.warehouse?.name || '-'}`,
+        productId: Number(lot.productId),
+        productName: lot.product?.name || '',
+        productCode: lot.product?.code || '',
+        category: (lot.product as any)?.category?.name || '-',
+        currentStock: Number(lot.quantity),
+        safetyStock: null,
+        totalValue: 0,
+        lotNumber: lot.lotNumber,
+        daysLeft,
+        status: 'UNREAD',
+        createdAt: new Date().toISOString(),
+      });
+    }
+
     // 按严重程度排序
     const levelOrder: Record<string, number> = { CRITICAL: 0, WARNING: 1, INFO: 2 };
     alerts.sort((a, b) => (levelOrder[a.level] || 3) - (levelOrder[b.level] || 3));
@@ -105,6 +145,8 @@ export async function GET(req: NextRequest) {
       filteredAlerts = alerts.filter(a => a.title.includes("缺货"));
     } else if (type === "value") {
       filteredAlerts = alerts.filter(a => a.title.includes("高库存"));
+    } else if (type === "expiry") {
+      filteredAlerts = alerts.filter(a => a.title.includes("临期") || a.title.includes("过期"));
     }
 
     const total = filteredAlerts.length;

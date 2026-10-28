@@ -6,6 +6,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, Descriptions, Table, Tag, Typography, Button, Space, message, Spin, Modal, Select, InputNumber, Form } from 'antd';
 import { PrinterOutlined, CheckCircleOutlined, ArrowLeftOutlined, EnvironmentOutlined } from '@ant-design/icons';
 import { useRouter, useParams } from 'next/navigation';
+import AttachmentPanel from '@/components/ui/AttachmentPanel';
 
 const { Text } = Typography;
 
@@ -264,6 +265,11 @@ export default function StockInDetailPage() {
 
       <Card title="入库明细">
         <Table columns={itemColumns} dataSource={items} rowKey="id" pagination={false} size="small" scroll={{ x: 700 }} />
+      </Card>
+
+      {/* v1.3 单据附件：采购发票 / 送货单照片，审计与纠纷时用得上 */}
+      <Card title="单据附件" style={{ marginTop: 16 }}>
+        <AttachmentPanel module="inbound" refId={String(id)} />
       </Card>
 
       {/* 放置货位弹窗 */}

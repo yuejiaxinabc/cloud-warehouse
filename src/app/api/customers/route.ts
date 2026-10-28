@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: true, data: serializeBigInt(customer) });
     }
 
-    const where: any = {};
+    const where: any = { deletedAt: null };
     if (keyword) {
       where.OR = [
         { name: { contains: keyword } },
@@ -101,7 +101,8 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, error: '该客户有关联出库单，无法删除' }, { status: 400 });
     }
 
-    await prisma.customer.delete({ where: { id: Number(id) } });
+    // v1.2.0 软删除
+    await prisma.customer.update({ where: { id: Number(id) }, data: { deletedAt: new Date() } });
     return NextResponse.json({ success: true });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });

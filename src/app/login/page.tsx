@@ -18,6 +18,7 @@ function LoginView() {
   const [captchaToken, setCaptchaToken] = useState("");
   const [captchaSvg, setCaptchaSvg] = useState("");
   const [captchaInput, setCaptchaInput] = useState("");
+  const [totpInput, setTotpInput] = useState("");
   const [systemInfo, setSystemInfo] = useState({ companyName: "云仓智能仓储管理平台", contactPhone: "" });
   const [agreed, setAgreed] = useState(false);
   const router = useRouter();
@@ -78,6 +79,7 @@ function LoginView() {
         password: values.password,
         captchaToken,
         captchaAnswer: captchaInput.trim(),
+        totp: totpInput.trim(),
         redirect: false,
       });
 
@@ -183,6 +185,18 @@ function LoginView() {
                   )}
                 </div>
               </div>
+            </Form.Item>
+
+            <Form.Item label="两步验证码" extra="未开启两步验证可留空；开启后填 6 位动态码">
+              <Input
+                value={totpInput}
+                onChange={(e) => setTotpInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                placeholder="6 位数字（可选）"
+                maxLength={6}
+                inputMode="numeric"
+                style={{ fontFamily: 'ui-monospace, monospace', letterSpacing: '0.3em' }}
+                disabled={loading}
+              />
             </Form.Item>
 
             <Form.Item style={{ marginBottom: 12 }}>

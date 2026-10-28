@@ -61,7 +61,10 @@ export async function POST(req: NextRequest) {
             locationId: it.locationId ? Number(it.locationId) : null,
             quantity: Number(it.planQty || it.quantity),
             costPrice: it.unitPrice ? Number(it.unitPrice) : null,
-            lotNumber: it.batchNo || null,
+            lotNumber: it.batchNo || it.lotNumber || null,
+            // v1.2.0：有保质期的商品必须录生产日期，到期日由过账逻辑按保质期推算
+            producedAt: it.producedAt ? new Date(it.producedAt) : null,
+            expiredAt: it.expiredAt ? new Date(it.expiredAt) : null,
           })),
         } : undefined,
       },

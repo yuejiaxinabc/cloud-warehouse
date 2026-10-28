@@ -8,7 +8,7 @@ import { requireAuth } from '@/lib/auth-guard';
 
 export async function GET() {
   try {
-    const categories = await prisma.category.findMany({ orderBy: { id: 'asc' } });
+    const categories = await prisma.category.findMany({ where: { deletedAt: null }, orderBy: { id: 'asc' } });
     return NextResponse.json({ success: true, data: serializeBigInt(categories) });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
@@ -65,7 +65,8 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, error: '该分类下有子分类，无法删除' }, { status: 400 });
     }
 
-    const deleted = await prisma.category.delete({ where: { id: Number(id) } });
+    // v1.2.0 软删除
+    const deleted = await prisma.category.update({ where: { id: Number(id) }, data: { deletedAt: new Date() } });
     await writeLog({
       module: 'category',
       action: 'delete',

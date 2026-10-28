@@ -8,6 +8,7 @@ import { requireAuth } from '@/lib/auth-guard';
 import { AppError, handleApiError } from '@/lib/errors';
 import { normalizeLocationCode, syncLocationStock } from '@/lib/location-binding';
 import { assertLocationAvailableFor } from '@/lib/location-occupancy';
+import { emitWebhook } from '@/lib/webhook';
 
 export async function GET(req: NextRequest) {
     await requireAuth(req);
@@ -22,7 +23,7 @@ export async function GET(req: NextRequest) {
     const categoryId = searchParams.get('categoryId') || '';
     const status = searchParams.get('status') || '';
 
-    const where: any = {};
+    const where: any = { deletedAt: null };
     if (keyword) {
       where.OR = [
         { name: { contains: keyword } },
@@ -77,6 +78,8 @@ export async function POST(req: NextRequest) {
       name, code, barcode, categoryId, unitId, spec, brand, model,
       safetyStock, maxStock, costMethod, defaultCost, salePrice, remark,
       warehouseId, locationCode, initialStock, initialCost,
+      // v1.2.0：保质期决定入库是否强制批次/生产日期，也决定出库 FEFO 是否必须
+      shelfLifeDays, leadTimeDays, weight, volume, enableBatch, enableSerial,
     } = body;
 
     // ---- 参数校验：全部抛 AppError，前端能拿到明确原因 ----
@@ -122,6 +125,16 @@ export async function POST(req: NextRequest) {
           costMethod: costMethod || 'WEIGHTED',
           defaultCost: defaultCost !== undefined && defaultCost !== null ? Number(defaultCost) : null,
           salePrice: salePrice !== undefined && salePrice !== null ? Number(salePrice) : null,
+          shelfLifeDays: shelfLifeDays !== undefined && shelfLifeDays !== null && shelfLifeDays !== ''
+            ? Number(shelfLifeDays)
+            : null,
+          leadTimeDays: leadTimeDays !== undefined && leadTimeDays !== null && leadTimeDays !== ''
+            ? Number(leadTimeDays)
+            : null,
+          weight: weight !== undefined && weight !== null && weight !== '' ? Number(weight) : null,
+          volume: volume !== undefined && volume !== null && volume !== '' ? Number(volume) : null,
+          enableBatch: enableBatch === undefined ? (Number(shelfLifeDays) > 0) : !!enableBatch,
+          enableSerial: !!enableSerial,
           remark: remark || null,
           status: body.status !== undefined ? Number(body.status) : 1,
           imageUrl: body.imageUrl || null,
@@ -215,6 +228,15 @@ export async function POST(req: NextRequest) {
       return product;
     });
 
+    // v1.2.0：推一次 Webhook（失败不影响主流程）
+    void emitWebhook('product.created', {
+      productId: String(result.id),
+      code: finalCode,
+      name: String(name),
+      initialStock: hasStock ? stockQty : 0,
+      locationCode: hasStock ? locationCodeNorm : null,
+    });
+
     const _p = PLATFORM_NAMES[getClientPlatform()] || getClientPlatform();
     await writeLog({
       module: 'product',
@@ -260,6 +282,12 @@ export async function PUT(req: NextRequest) {
     if (updateData.salePrice !== undefined) data.salePrice = updateData.salePrice ? Number(updateData.salePrice) : null;
     if (updateData.remark !== undefined) data.remark = updateData.remark || null;
     if (updateData.status !== undefined) data.status = Number(updateData.status);
+    if (updateData.shelfLifeDays !== undefined) {
+      data.shelfLifeDays = updateData.shelfLifeDays ? Number(updateData.shelfLifeDays) : null;
+    }
+    if (updateData.leadTimeDays !== undefined) {
+      data.leadTimeDays = updateData.leadTimeDays ? Number(updateData.leadTimeDays) : null;
+    }
     if (updateData.imageUrl !== undefined) data.imageUrl = updateData.imageUrl || null;
 
     const product = await prisma.product.update({
@@ -297,23 +325,10 @@ export async function DELETE(req: NextRequest) {
       }, { status: 400 });
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.inventoryTransaction.deleteMany({ where: { productId } });
-      await tx.inventoryLot.deleteMany({ where: { productId } });
-      await tx.locationStock.deleteMany({ where: { productId } });
-      await tx.inventory.deleteMany({ where: { productId } });
-      await tx.costSnapshot.deleteMany({ where: { productId } });
-      await tx.productCostSetting.deleteMany({ where: { productId } });
-      await tx.bomItem.deleteMany({ where: { productId } });
-      await tx.countItem.deleteMany({ where: { productId } });
-      await tx.transferItem.deleteMany({ where: { productId } });
-      await tx.outboundItem.deleteMany({ where: { productId } });
-      await tx.inboundItem.deleteMany({ where: { productId } });
-      await tx.purchaseItem.deleteMany({ where: { productId } });
-      await tx.salesItem.deleteMany({ where: { productId } });
-      await tx.productSupplier.deleteMany({ where: { productId } });
-      await tx.serialNumber.deleteMany({ where: { productId } });
-      await tx.product.delete({ where: { id: productId } });
+    // v1.2.0：改为软删除（回收站可恢复），历史单据与流水一律保留
+    await prisma.product.update({
+      where: { id: productId },
+      data: { deletedAt: new Date() },
     });
 
     const _p3 = PLATFORM_NAMES[getClientPlatform()] || getClientPlatform(); await writeLog({ module: 'product', action: 'delete', ip: getClientIp(), content: `删除商品 ID:${productId} [来源: ${_p3}]`, refType: 'product', refId: productId });

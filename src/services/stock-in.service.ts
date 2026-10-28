@@ -195,6 +195,44 @@ export class StockInService {
         const qty = Number(item.quantity);
         const costPrice = item.costPrice ? Number(item.costPrice) : 0;
 
+        // ===== 批次与效期校验（v1.2.0）=====
+        // 有保质期的商品（shelfLifeDays > 0）入库必须录批次号 + 生产日期，
+        // 到期日 = 生产日期 + 保质期天数；这是食品/医药类客户选型的硬要求。
+        const productInfo = await tx.product.findUnique({
+          where: { id: item.productId },
+          select: { shelfLifeDays: true, name: true, code: true },
+        });
+        const shelfLifeDays = Number(productInfo?.shelfLifeDays || 0);
+        const needShelfLife = shelfLifeDays > 0;
+
+        const explicitProducedAt: Date | null =
+          (item as any).producedAt
+            ? new Date((item as any).producedAt)
+            : item.lotAllocations.find((a) => a.producedAt)?.producedAt
+              ? new Date(item.lotAllocations.find((a) => a.producedAt)!.producedAt as any)
+              : null;
+
+        if (needShelfLife) {
+          if (!item.lotNumber && item.lotAllocations.length === 0) {
+            throw new AppError(
+              `商品「${productInfo?.name || item.productId}」有保质期（${shelfLifeDays} 天），入库必须填写批次号`,
+              400
+            );
+          }
+          if (!explicitProducedAt) {
+            throw new AppError(
+              `商品「${productInfo?.name || item.productId}」有保质期，入库必须填写生产日期`,
+              400
+            );
+          }
+        }
+
+        const computedExpiredAt: Date | null = (item as any).expiredAt
+          ? new Date((item as any).expiredAt)
+          : explicitProducedAt && needShelfLife
+            ? new Date(explicitProducedAt.getTime() + shelfLifeDays * 86400000)
+            : null;
+
         // 批次号：优先用批次分配 > 单据批号 > 自动生成
         let lotNumber = item.lotNumber || null;
         if (item.lotAllocations.length > 0) {
@@ -335,6 +373,8 @@ export class StockInService {
                 lotNumber,
                 quantity: qty,
                 costPrice: item.costPrice,
+                producedAt: explicitProducedAt,
+                expiredAt: computedExpiredAt,
               },
             });
           }

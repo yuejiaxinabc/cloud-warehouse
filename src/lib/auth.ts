@@ -37,6 +37,7 @@ export const authOptions: NextAuthOptions = {
         // 验证码随登录请求一并提交，由服务端一次性校验
         captchaToken: { label: '验证码票据', type: 'text' },
         captchaAnswer: { label: '验证码', type: 'text' },
+        totp: { label: '两步验证码', type: 'text' },
       },
       async authorize(credentials, req) {
         // 密钥强度复核（启动期已由 instrumentation.ts 拦过一次，这里是纵深防御）
@@ -59,6 +60,9 @@ export const authOptions: NextAuthOptions = {
           throw new Error('请输入用户名和密码');
         }
 
+        // ---- 1.5 两步验证（开启后必须提供 6 位动态码）----
+        const totpCode = String((credentials as any)?.totp || '').trim();
+
         // ---- 2. 双维度限速 ----
         // next-auth v4 的 req.headers 是普通对象而非 Headers 实例，clientIp 内部已兼容
         const ip = clientIp((req?.headers as Record<string, string>) ?? {});
@@ -73,6 +77,14 @@ export const authOptions: NextAuthOptions = {
         if (!userHit.allowed) {
           // 账号维度用退避提示，不暴露「这个账号存在与否」
           throw new Error('尝试过于频繁，请稍后再试');
+        }
+
+        // v1.2.0：递增延迟——失败次数越多，登录响应人为变慢（上限 2s），
+        // 不锁号（避免被用来打死管理员），但把暴力破解的吞吐压下来。
+        const failures = Math.max(MAX_IP_ATTEMPTS - ipHit.remaining, MAX_USER_ATTEMPTS - userHit.remaining, 0);
+        if (failures >= 3) {
+          const delay = Math.min(2000, 150 * 2 ** (failures - 3));
+          await new Promise((r) => setTimeout(r, delay));
         }
 
         // ---- 3. 查用户 ----
@@ -114,6 +126,21 @@ export const authOptions: NextAuthOptions = {
             ip,
           });
           throw new Error(GENERIC_ERROR);
+        }
+
+        // 两步验证：口令正确后还要过动态码这一关
+        if ((user as any).twoFactorEnabled) {
+          const { verifyTotp } = await import('./totp');
+          if (!verifyTotp(String((user as any).totpSecret || ''), totpCode)) {
+            await writeLog({
+              module: 'auth',
+              action: 'login_failed',
+              userId: user.id,
+              content: `登录失败：${username} 两步验证码不正确，IP ${ip}`,
+              ip,
+            });
+            throw new Error(totpCode ? '动态验证码不正确' : '请输入两步验证动态码');
+          }
         }
 
         if (user.status !== 1) {

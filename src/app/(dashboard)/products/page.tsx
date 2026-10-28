@@ -172,6 +172,8 @@ export default function ProductsPage() {
       remark: (record as any).remark || undefined,
       salePrice: (record as any).salePrice ?? undefined,
       defaultCost: (record as any).defaultCost ?? undefined,
+      shelfLifeDays: (record as any).shelfLifeDays ?? undefined,
+      leadTimeDays: (record as any).leadTimeDays ?? undefined,
     });
     setImageUrl(record.imageUrl || '');
     setFileList(record.imageUrl ? [{ uid: '-1', name: 'cover.png', status: 'done', url: record.imageUrl }] : []);
@@ -523,6 +525,21 @@ export default function ProductsPage() {
             <Col span={8}>
               <Form.Item name="status" label="状态">
                 <Select options={[{ value: 1, label: '启用' }, { value: 0, label: '停用' }]} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                name="shelfLifeDays"
+                label="保质期（天）"
+                tooltip="填了保质期，入库时会强制录入批次号 + 生产日期，出库按先到期先出（FEFO）"
+                extra="0 或留空表示不管效期"
+              >
+                <InputNumber style={{ width: '100%' }} min={0} placeholder="如 30" addonAfter="天" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="leadTimeDays" label="采购周期">
+                <InputNumber style={{ width: '100%' }} min={0} placeholder="如 7" addonAfter="天" />
               </Form.Item>
             </Col>
           </Row>

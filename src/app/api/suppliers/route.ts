@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: true, data: serializeBigInt(supplier) });
     }
 
-    const where: any = {};
+    const where: any = { deletedAt: null };
     if (keyword) {
       where.OR = [
         { name: { contains: keyword } },
@@ -120,7 +120,8 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, error: '该供应商有关联入库单，无法删除' }, { status: 400 });
     }
 
-    const deletedSupplier = await prisma.supplier.delete({ where: { id: Number(id) } });
+    // v1.2.0 软删除：进回收站，15 天内可恢复
+    const deletedSupplier = await prisma.supplier.update({ where: { id: Number(id) }, data: { deletedAt: new Date() } });
     await writeLog({
       module: 'supplier',
       action: 'delete',

@@ -36,6 +36,10 @@ model Organization {
 }
 
 model User {
+  // v1.2.0 两步验证（TOTP）
+  totpSecret       String?   @map("totp_secret") @db.VarChar(64)
+  twoFactorEnabled Boolean   @default(false) @map("two_factor_enabled")
+
   id             BigInt       @id @default(autoincrement()) @db.UnsignedBigInt
   username       String       @unique @db.VarChar(50)
   password       String       @db.VarChar(255)
@@ -147,6 +151,8 @@ model Unit {
 
   products Product[]
 
+  deletedAt DateTime? @map("deleted_at") // 软删除（回收站）
+
   @@map("units")
 }
 
@@ -173,6 +179,8 @@ model Category {
   parent   Category?  @relation("CatTree", fields: [parentId], references: [id])
   children Category[] @relation("CatTree")
   products Product[]
+
+  deletedAt DateTime? @map("deleted_at") // 软删除（回收站）
 
   @@map("categories")
 }
@@ -205,6 +213,8 @@ model Supplier {
   purchaseOrders   PurchaseOrder[]
   inboundOrders    InboundOrder[]
 
+  deletedAt DateTime? @map("deleted_at") // 软删除（回收站）
+
   @@map("suppliers")
 }
 
@@ -231,6 +241,8 @@ model Customer {
 
   salesOrders SalesOrder[]
   outboundOrders OutboundOrder[]
+
+  deletedAt DateTime? @map("deleted_at") // 软删除（回收站）
 
   @@map("customers")
 }
@@ -290,6 +302,8 @@ model Product {
   boms             Bom[]
   costSettings     ProductCostSetting[]
   costSnapshots    CostSnapshot[]
+
+  deletedAt DateTime? @map("deleted_at") // 软删除（回收站）
 
   @@map("products")
 }
@@ -365,6 +379,8 @@ model Warehouse {
   inboundOrders  InboundOrder[]
   countOrders    CountOrder[]
   purchaseRequests PurchaseRequest[]
+
+  deletedAt DateTime? @map("deleted_at") // 软删除（回收站）
 
   @@map("warehouses")
 }
@@ -493,6 +509,71 @@ model LocationStock {
   @@map("location_stocks")
 }
 
+/// 报表邮件订阅（v1.2.0）：库存日报/周报定时发到指定邮箱
+model ReportSubscription {
+  id         BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  name       String    @db.VarChar(100)
+  type       String    @db.VarChar(20) // daily / weekly
+  recipients String    @db.VarChar(1000) // 逗号分隔
+  sendHour   Int       @default(8) @map("send_hour")
+  weekday    Int?      // 1-7，周报用
+  enabled    Int       @default(1)
+  lastSentAt DateTime? @map("last_sent_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  @@map("report_subscriptions")
+}
+
+/// Webhook 订阅（v1.2.0）：库存/单据变动主动推给 ERP 或电商中台
+model WebhookEndpoint {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name       String   @db.VarChar(100)
+  url        String   @db.VarChar(500)
+  secret     String   @db.VarChar(100)
+  events     String   @default("*") @db.VarChar(300) // 逗号分隔，* 表示全部
+  status     Int      @default(1)
+  lastStatus Int?     @map("last_status")
+  lastAt     DateTime? @map("last_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@map("webhook_endpoints")
+}
+
+/// 单据附件（v1.3）：入库单挂发票/送货单、出库单挂签收回单
+model Attachment {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  module     String   @db.VarChar(30) // inbound / outbound / purchase / transfer
+  refId      BigInt   @map("ref_id") @db.UnsignedBigInt
+  url        String   @db.VarChar(500)
+  fileName   String   @map("file_name") @db.VarChar(200)
+  mime       String?  @db.VarChar(100)
+  size       Int?
+  uploadedBy BigInt?  @map("uploaded_by") @db.UnsignedBigInt
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([module, refId])
+  @@map("attachments")
+}
+
+/// 库存日结快照（v1.3）：每天固定时点冻结一份库存，支撑任意时点回溯
+model InventorySnapshot {
+  id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  snapshotDate DateTime @map("snapshot_date") @db.Date
+  productId    BigInt   @map("product_id") @db.UnsignedBigInt
+  warehouseId  BigInt   @map("warehouse_id") @db.UnsignedBigInt
+  onHand       Decimal  @db.Decimal(18, 3)
+  locked       Decimal  @default(0) @db.Decimal(18, 3)
+  available    Decimal  @default(0) @db.Decimal(18, 3)
+  avgCost      Decimal? @map("avg_cost") @db.Decimal(18, 4)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@unique([snapshotDate, productId, warehouseId])
+  @@index([snapshotDate])
+  @@map("inventory_snapshots")
+}
+
 model InventoryLot {
   id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
   productId    BigInt   @map("product_id") @db.UnsignedBigInt
@@ -612,6 +693,9 @@ model InboundItem {
   lotNumber     String?  @map("lot_number") @db.VarChar(50)
   // FIX-2026-1013：入库明细必须记住货位，否则过账时无法把货落到货架上
   locationId    BigInt?  @map("location_id") @db.UnsignedBigInt
+  // v1.2.0：批次与效期——有保质期的商品入库必须录批次号 + 生产日期，到期日按保质期推算
+  producedAt    DateTime? @map("produced_at")
+  expiredAt     DateTime? @map("expired_at")
   quantity      Decimal  @db.Decimal(18, 3)
   receivedQty   Decimal? @map("received_qty") @db.Decimal(18, 3)
   costPrice     Decimal? @map("cost_price") @db.Decimal(18, 4)

@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth';
 import { StockInService } from '@/services/stock-in.service';
 import { idSchema } from '@/lib/validators';
 import { successResponse, errorResponse, handleApiError } from '@/lib/errors';
+import { emitWebhook } from '@/lib/webhook';
 
 /**
  * POST /api/stock-in/[id]/post - 入库单过账
@@ -22,6 +23,14 @@ export async function POST(
 
     const ip = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
     const result = await StockInService.post(id, operatorId, ip);
+
+    // v1.2.0：入库过账推送 Webhook（异步，失败不阻塞）
+    void emitWebhook('inbound.posted', {
+      orderId: String(id),
+      operatorId,
+      result: typeof result === 'object' ? JSON.parse(JSON.stringify(result, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))) : result,
+    });
+
     return successResponse(result, '入库单过账成功');
   } catch (error) {
     return handleApiError(error);

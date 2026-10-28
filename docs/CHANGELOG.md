@@ -7,6 +7,73 @@
 
 ## 版本历史
 
+### v1.2.0（2026-10-28 · 批次效期 / 补货闭环 / 库存冻结 / 单据附件 / 日结快照 / 现场大屏 / 初始化向导）
+
+> 基线 v1.1.1。一次版本覆盖七项：批次与效期一等公民、补货闭环、库存冻结、单据附件、日结快照、现场大屏、初始化向导。
+> 仍待做：软删除回收站、开放 API/Webhook、2FA、报表订阅、入库强制批次 + FEFO 出库（见 ROADMAP）。
+
+#### 第一批 · 批次与效期 / 补货闭环
+
+- ✅ **FEAT-2026-1101 批次与效期台账**：新增 `/inventory/lots` 页与 `GET /api/inventory/lots`，
+  按批次展示批次号 / 生产日期 / 到期日期 / 剩余天数 / 状态，支持仓库、关键词、临期天数筛选。
+  数据模型无需迁移（`inventory_lots` 已有 `producedAt` / `expiredAt` / `status`）。
+- ✅ **FEAT-2026-1102 临期自动预警**：`GET /api/alerts` 增加 `expiry` 类型，直接扫批次效期：
+  已过期 → 紧急，≤7 天 → 紧急，≤30 天 → 警告；预警中心新增「批次临期」筛选。
+- ✅ **FEAT-2026-1103 库存冻结入口**：`POST /api/inventory/lots/[id]/status`（freeze / unfreeze），
+  冻结同步累加 `inventory.locked`（不超过在手量）、解冻原样释放，并写操作日志；
+  批次台账页每行提供冻结 / 解冻按钮。
+- ✅ **FEAT-2026-1104 补货建议闭环**：`GET /api/replenishment` 按
+  「建议量 = ceil(安全库存 − 可用量)，且不超过库存上限」计算每仓缺口；
+  预警中心新增「补货建议」卡片，勾选后 `POST /api/replenishment/to-purchase-request`
+  一键生成购买申请（同名同仓已有 PENDING 的自动跳过），打通「预警 → 补货 → 入库」。
+
+#### 第五批 · 入库强制批次 / 出库 FEFO
+
+- ✅ **FEAT-2026-1501 商品保质期**：商品主档新增「保质期（天）」「采购周期」可维护（新建/编辑抽屉均可填），
+  `shelfLifeDays > 0` 即视为效期商品，触发后续强制规则。
+- ✅ **FEAT-2026-1502 入库强制批次与生产日期**：效期商品入库时必须填批次号 + 生产日期，
+  否则过账直接拒绝（提示「商品「XXX」有保质期，入库必须填写生产日期」）；
+  到期日 = 生产日期 + 保质期天数自动推算并写入 `inventory_lots.expired_at`。
+  入库页面扫码/手动表单均增加「批次号」「生产日期」两个字段。
+- ✅ **FEAT-2026-1503 出库 FEFO 选批**：出库过账改为按「到期日升序、无到期日排最后、同到期日按入库先后」
+  逐批扣减，每笔扣减写 `outbound_lot_picks`，流水备注记录「FEFO 扣减：LOT-A×5，LOT-B×3」；
+  效期商品批次不足则拒绝过账（不会出现「有账无批」）；整个过程包在事务里，失败整单回滚。
+
+#### 第四批 · SMTP 与报表订阅
+
+- ✅ **FEAT-2026-1401 SMTP 配置**：后台「系统设置 → 邮件与订阅」可配 host / port / SSL·STARTTLS / 发件账号 / 授权码 / 发件人，
+  存 `system_configs(category=smtp)`，保存即生效无需重启；密码回读脱敏，留空表示不修改。
+- ✅ **FEAT-2026-1402 配置自检**：「测试连接」只做 SMTP 握手登录，「发送测试邮件」真发一封到指定收件人，
+  出错信息原样回显（如连接超时、认证失败），排障不用翻日志。
+- ✅ **FEAT-2026-1403 报表订阅**：`report_subscriptions` 表 + 订阅管理（每日/每周、发送整点、多收件人、启停），
+  `scripts/send-report.mjs` 由 cron 每小时第 5 分钟检查是否到点，发「库存日报/周报」HTML（总量、总值、低库存 TOP20），
+  同一天不重复发，发送时间写回 `lastSentAt`。
+
+#### 第三批 · 回收站 / 两步验证 / 开放 API 与 Webhook
+
+- ✅ **FEAT-2026-1301 软删除回收站**：`products / suppliers / customers / warehouses / categories / units` 增加 `deletedAt`，
+  删除改为进回收站（15 天倒计时），列表接口默认过滤；`/trash` 页可恢复，管理员可彻底删除。
+- ✅ **FEAT-2026-1302 两步验证（TOTP）**：自研 RFC6238 实现（无第三方依赖），`/api/auth/2fa` 生成密钥 / 启用 / 关闭；
+  开启后登录需额外 6 位动态码，登录页新增可选输入框。
+- ✅ **FEAT-2026-1303 登录递增延迟**：失败计数越多，`authorize()` 人为延迟越久（150ms 起、指数增长、2s 封顶），不锁号。
+- ✅ **FEAT-2026-1304 开放 API**：`GET /api/v1/open/products | inventory | movements`，支持 page/pageSize 与
+  updatedSince / since 增量同步；鉴权兼容「设置页 API Token」与历史 `api_tokens` 表，定长比较防时序侧信道。
+- ✅ **FEAT-2026-1305 Webhook 订阅**：`webhook_endpoints` 表 + `/api/webhooks` CRUD，事件
+  `product.created / inbound.posted / outbound.posted / stock.changed`，HMAC-SHA256 签名（`x-yc-signature`）、3s 超时、
+  记录 `last_status`；实测本机回调 200。
+- ✅ **FEAT-2026-1306 现场大屏改浅色**：白底卡片 + 轻阴影，适合会议室/办公区投屏。
+
+#### 第二批 · 审计与现场
+
+- ✅ **FEAT-2026-1201 单据附件**：`attachments` 表 + `/api/attachments`（GET/POST/DELETE，单张单据限 20 个），
+  入库单详情挂「采购发票 / 送货单」，出库单详情挂「签收回单」；文件仍走 `/api/upload` 的魔数校验与随机文件名。
+- ✅ **FEAT-2026-1202 库存日结快照**：`inventory_snapshots` 表 + `POST /api/snapshots/run`（幂等）+
+  `GET /api/snapshots?date=`（含最近 30 个可用日期）；服务器 cron 每天 00:05 跑 `scripts/daily-snapshot.mjs`。
+- ✅ **FEAT-2026-1203 现场大屏**：独立路由 `/screen`，浅色看板（KPI / 近 7 天出入库柱图 / 预警滚动 / 实时时钟），
+  30 秒轮询、只读，适合仓库挂电视。
+- ✅ **FEAT-2026-1204 初始化向导**：`/setup` 四步自检（单位 → 分类 → 仓库 → 商品），带完成度进度条与跳转入口，
+  并列出已预置的单位/分类模板。
+
 ### v1.1.1（2026-10-28 · 可用性修复 + 视觉重构）
 
 > 基线 v1.0.2（`63b106a`）。本版修掉「新建商品必然失败」这条阻断核心流程的 P0，

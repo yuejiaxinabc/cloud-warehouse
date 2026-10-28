@@ -11,6 +11,7 @@ export async function GET(req: NextRequest) {
     await requireAuth(req);
   try {
     const warehouses = await prisma.warehouse.findMany({
+      where: { deletedAt: null },
       orderBy: { id: "asc" },
       include: {
         zones: {
@@ -152,24 +153,10 @@ export async function DELETE(req: NextRequest) {
       }), { status: 400 });
     }
 
-    // 删除相关数据（按顺序）
-    await prisma.$transaction(async (tx) => {
-      // 删除货位
-      await tx.location.deleteMany({
-        where: { zone: { warehouseId: Number(id) } },
-      });
-      // 删除区域
-      await tx.zone.deleteMany({
-        where: { warehouseId: Number(id) },
-      });
-      // 删除库存记录
-      await tx.inventory.deleteMany({
-        where: { warehouseId: Number(id) },
-      });
-      // 删除仓库
-      await tx.warehouse.delete({
-        where: { id: Number(id) },
-      });
+    // v1.2.0 软删除：仓库进回收站，货架/货位结构保留（15 天内可恢复）
+    await prisma.warehouse.update({
+      where: { id: Number(id) },
+      data: { deletedAt: new Date() },
     });
 
     return NextResponse.json(serializeBigInt({ success: true }));
