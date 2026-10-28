@@ -78,11 +78,11 @@ export default function WarehousePage() {
   const totalQty = warehouses.reduce((sum: number, w: any) => sum + (w.totalQty || 0), 0);
 
   const columns = [
-    { title: "仓库编码", dataIndex: "code", key: "code", width: 120 },
-    { title: "仓库名称", dataIndex: "name", key: "name", width: 180 },
+    { title: "仓库编码", dataIndex: "code", key: "code", width: 110 },
+    { title: "仓库名称", dataIndex: "name", key: "name", width: 170 },
     { title: "地址", dataIndex: "address", key: "address", ellipsis: true },
-    { title: "联系人", dataIndex: "contact", key: "contact", width: 100 },
-    { title: "电话", dataIndex: "phone", key: "phone", width: 130 },
+    { title: "联系人", dataIndex: "contact", key: "contact", width: 90 },
+    { title: "电话", dataIndex: "phone", key: "phone", width: 120, responsive: ["lg"] as any },
     {
       title: "库存数量", key: "totalQty", width: 100,
       render: (_: any, r: any) => <Text strong>{r.totalQty || 0}</Text>,
@@ -122,8 +122,13 @@ export default function WarehousePage() {
   ];
 
   return (
-    <div style={{ padding: 24 }}>
-      <h4 style={{ margin: "0 0 24px", fontSize: 18, fontWeight: 600, color: "#0F172A", whiteSpace: "nowrap" }}>仓库管理</h4>
+    <div>
+      <div className="yc-page-head">
+        <div>
+          <h2 className="yc-page-title">仓库管理</h2>
+          <p className="yc-page-desc">仓库、货架与货位结构；新建仓库会自动生成 A–Z 26 个货架 × 100 个货位</p>
+        </div>
+      </div>
 
       {/* 统计卡片 */}
       <Row gutter={16} style={{ marginBottom: 24 }}>
@@ -149,7 +154,15 @@ export default function WarehousePage() {
           <Input.Search placeholder="搜索仓库名称或编码" style={{ width: 300 }} allowClear onSearch={setKeyword} onChange={(e) => setKeyword(e.target.value)} />
           <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditId(null); form.resetFields(); setCreateModalOpen(true); }}>新增仓库</Button>
         </div>
-        <Table columns={columns} dataSource={filteredWarehouses} rowKey="id" loading={loading} pagination={false} scroll={{ x: 1200 }} />
+        <Table
+          columns={columns}
+          dataSource={filteredWarehouses}
+          rowKey="id"
+          loading={loading}
+          pagination={false}
+          size="middle"
+          scroll={{ x: 880 }}
+        />
       </Card>
 
       <Modal title={editId ? "编辑仓库" : "新增仓库"} open={createModalOpen} onCancel={() => { setCreateModalOpen(false); setEditId(null); form.resetFields(); }} onOk={handleSubmit} width={isMobile ? "95%" : 600}>

@@ -39,6 +39,16 @@ export const PLATFORM_NAMES: Record<string, string> = {
   'web': 'Web',
 };
 
+/** 会话里的 id 是字符串，这里统一转成 BigInt；非法值一律写 null，绝不让日志把主流程带崩 */
+function toBigIntOrNull(v: number | bigint | string | null | undefined): bigint | null {
+  if (v === null || v === undefined || v === '') return null;
+  try {
+    return BigInt(v as any);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 写操作日志
  * @param module  模块: system/auth/user/role/settings/product/warehouse/category/unit/supplier/stock-in/stock-out/transfer/stocktake/inventory
@@ -61,7 +71,7 @@ export async function writeLog({
   module: string;
   action: string;
   content?: string;
-  userId?: number | bigint | null;
+  userId?: number | bigint | string | null;
   refType?: string;
   refId?: number | bigint | null;
   ip?: string;
@@ -69,11 +79,11 @@ export async function writeLog({
   try {
     await prisma.operationLog.create({
       data: {
-        userId: userId ? BigInt(userId) : null,
+        userId: toBigIntOrNull(userId),
         module,
         action,
         refType: refType || null,
-        refId: refId ? BigInt(refId) : null,
+        refId: toBigIntOrNull(refId),
         content: content || null,
         ip: ip || null,
       },

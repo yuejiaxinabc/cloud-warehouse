@@ -35,6 +35,30 @@ const ROLES = [
   { code: "auditor", name: "审计员" },
 ];
 
+// 基础计量单位（v1.1.1：新环境开箱即可建商品，不必先手工配置单位）
+const UNITS = [
+  { code: "PCS", name: "个" },
+  { code: "PC", name: "件" },
+  { code: "BOX", name: "箱" },
+  { code: "SET", name: "套" },
+  { code: "KG", name: "千克" },
+  { code: "G", name: "克" },
+  { code: "M", name: "米" },
+  { code: "ROLL", name: "卷" },
+  { code: "BTL", name: "瓶" },
+  { code: "BAG", name: "袋" },
+];
+
+// 基础商品分类（同上，属于主数据而非业务数据）
+const CATEGORIES = [
+  { code: "ELEC", name: "电子元件" },
+  { code: "HARD", name: "五金配件" },
+  { code: "PACK", name: "包装材料" },
+  { code: "OFFICE", name: "办公用品" },
+  { code: "PPE", name: "劳保用品" },
+  { code: "RAW", name: "原材料" },
+];
+
 // 预置账号（仅账号密码，不含任何业务数据）
 const USERS = [
   { username: "admin", realName: "系统管理员", password: "Admin@123", role: "admin" },
@@ -60,7 +84,9 @@ async function main() {
     await prisma.permission.upsert({
       where: { code },
       update: {},
-      create: { code, name: code },
+      // v1.1.1：Permission.type 是必填字段（menu/button/api），这里补上，
+      // 否则 ts-node 直接编译失败，种子脚本跑不起来（v1.0.2 遗留缺陷）
+      create: { code, name: code, type: "api" },
     });
   }
   const allPerms = await prisma.permission.findMany();
@@ -82,6 +108,22 @@ async function main() {
         create: { roleId: adminRole.id, permissionId: perm.id },
       });
     }
+  }
+
+  // 3.5 基础主数据：计量单位 + 商品分类（幂等，不覆盖已有同名数据）
+  for (const u of UNITS) {
+    await prisma.unit.upsert({
+      where: { code: u.code },
+      update: {},
+      create: u,
+    });
+  }
+  for (const c of CATEGORIES) {
+    await prisma.category.upsert({
+      where: { code: c.code },
+      update: {},
+      create: c,
+    });
   }
 
   // 4. 账号
@@ -110,6 +152,7 @@ async function main() {
 
   console.log("初始化完成。预置账号：");
   for (const u of USERS) console.log(`  ${u.username} / ${u.password}  (${u.role})`);
+  console.log(`基础主数据：${UNITS.length} 个计量单位、${CATEGORIES.length} 个商品分类（幂等，可重复执行）。`);
   console.log("未创建任何仓库、库区、货位、商品、库存 —— 请登录后自行建立或通过 Excel 导入。");
 }
 

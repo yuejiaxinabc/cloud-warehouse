@@ -27,8 +27,21 @@ export function normalizeLocationCode(raw: string): string {
   const code = String(raw || '').trim().toUpperCase();
   if (!code) throw new Error('货位编码不能为空');
   if (LOCATION_CODE_RE.test(code)) return code;
-  if (LEGACY_CODE_RE.test(code)) return code + '-01';
-  throw new Error('货位编码必须为四段格式 区-排-列-位，例如 A-01-02-03');
+
+  // v1.1.1：用户习惯手写 A-1-1-1（单位数不补零），这里统一补成 A-01-01-01；
+  // 五段码（A-1-1-1-2，历史 box 序号）只取前四段。
+  const parts = code.split('-').map((s) => s.trim());
+  if (parts.length >= 3 && parts.length <= 5 && /^[A-Z]$/.test(parts[0])) {
+    const numeric = parts.slice(1);
+    if (numeric.every((s) => /^\d{1,2}$/.test(s))) {
+      // 规范：区(字母) + 三组数字 = 四段
+      let body = numeric.slice(0, 3).map((s) => s.padStart(2, '0'));
+      if (body.length === 2) body = [...body, '01']; // A-1-1 三段旧码补一层
+      if (body.length === 3) return [parts[0], ...body].join('-');
+    }
+  }
+
+  throw new Error('货位编码格式错误，应为「区-排-列-位」，例如 A-01-02-03（A-1-1-1 也可以）');
 }
 
 export function isValidLocationCode(raw: string): boolean {

@@ -5,6 +5,9 @@ import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
 import { writeLog, getClientIp, getClientPlatform, PLATFORM_NAMES } from '@/lib/log';
 import { requireAuth } from '@/lib/auth-guard';
+import { AppError, handleApiError } from '@/lib/errors';
+import { normalizeLocationCode, syncLocationStock } from '@/lib/location-binding';
+import { assertLocationAvailableFor } from '@/lib/location-occupancy';
 
 export async function GET(req: NextRequest) {
     await requireAuth(req);
@@ -62,7 +65,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-    await requireAuth(req);
+  await requireAuth(req);
   try {
     const session = await getServerSession(authOptions);
     if (!session) return NextResponse.json({ success: false, error: '请先登录' }, { status: 401 });
@@ -70,209 +73,161 @@ export async function POST(req: NextRequest) {
     if (!roles.includes('admin')) return NextResponse.json({ success: false, error: '权限不足' }, { status: 403 });
 
     const body = await req.json();
-    const { 
-      name, code, barcode, categoryId, unitId, spec, brand, model, 
+    const {
+      name, code, barcode, categoryId, unitId, spec, brand, model,
       safetyStock, maxStock, costMethod, defaultCost, salePrice, remark,
-      warehouseId, locationId, locationCode, initialStock, initialCost
+      warehouseId, locationCode, initialStock, initialCost,
     } = body;
 
-    if (!name || !code) {
-      return NextResponse.json({ success: false, error: '商品编码和名称必填' }, { status: 400 });
-    }
+    // ---- 参数校验：全部抛 AppError，前端能拿到明确原因 ----
+    if (!name || !String(name).trim()) throw new AppError('请填写商品名称', 400);
+    if (!code || !String(code).trim()) throw new AppError('请填写商品编码', 400);
+    if (!unitId) throw new AppError('请选择计量单位', 400);
 
-    const existing = await prisma.product.findUnique({ where: { code } });
-    if (existing) {
-      return NextResponse.json({ success: false, error: '商品编码已存在' }, { status: 400 });
+    const finalCode = String(code).trim();
+
+    const existing = await prisma.product.findUnique({ where: { code: finalCode } });
+    if (existing) throw new AppError(`商品编码「${finalCode}」已存在，请换一个编码`, 409);
+
+    const stockQty = Number(initialStock ?? 0);
+    const hasStock = Number.isFinite(stockQty) && stockQty > 0;
+    const costPrice = Number(initialCost || defaultCost || 0);
+
+    if (hasStock && !warehouseId) throw new AppError('有初始库存时必须选择所属仓库', 400);
+    if (hasStock && !locationCode) throw new AppError('有初始库存时必须指定货位', 400);
+
+    let locationCodeNorm = '';
+    if (hasStock) {
+      try {
+        locationCodeNorm = normalizeLocationCode(String(locationCode));
+      } catch (e: any) {
+        throw new AppError(e?.message || '货位编码格式错误', 400);
+      }
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      // 1. 创建商品
+      // 1. 商品主档
       const product = await tx.product.create({
         data: {
-          name, code, barcode: barcode || null,
+          name: String(name).trim(),
+          code: finalCode,
+          barcode: barcode || null,
           ...(categoryId ? { category: { connect: { id: BigInt(categoryId) } } } : {}),
           ...(unitId ? { unit: { connect: { id: BigInt(unitId) } } } : {}),
-          spec: spec || null, brand: brand || null, model: model || null,
-          safetyStock: safetyStock ? Number(safetyStock) : null,
-          maxStock: maxStock ? Number(maxStock) : null,
+          spec: spec || null,
+          brand: brand || null,
+          model: model || null,
+          safetyStock: safetyStock !== undefined && safetyStock !== null ? Number(safetyStock) : null,
+          maxStock: maxStock !== undefined && maxStock !== null ? Number(maxStock) : null,
           costMethod: costMethod || 'WEIGHTED',
-          defaultCost: defaultCost ? Number(defaultCost) : null,
-          salePrice: salePrice ? Number(salePrice) : null,
-          remark: remark || null, status: 1,
+          defaultCost: defaultCost !== undefined && defaultCost !== null ? Number(defaultCost) : null,
+          salePrice: salePrice !== undefined && salePrice !== null ? Number(salePrice) : null,
+          remark: remark || null,
+          status: body.status !== undefined ? Number(body.status) : 1,
           imageUrl: body.imageUrl || null,
         },
       });
 
-      // 2. 如果有初始库存，手动选货位（每货位=1种商品，不限数量）
-      if (warehouseId && (locationId || locationCode) && initialStock && Number(initialStock) > 0) {
-        const stockQty = Number(initialStock);
-        const costPrice = initialCost ? Number(initialCost) : (defaultCost ? Number(defaultCost) : 0);
+      if (!hasStock) return product;
 
-        // 查找货位和货位（支持 4 段编码 A-1-1-1 或 3 段 A-1-1）
-        let location: any;
-        let targetBox: any;
-        if (locationCode) {
-          const code = locationCode.trim();
-          const parts = code.split('-');
-          let locCode = code;
-          let boxCode = '';
-          
-          if (parts.length === 4) {
-            // 4 段编码：最后一段是货位编号
-            locCode = parts.slice(0, 3).join('-');
-            boxCode = code;
-          } else if (parts.length === 3) {
-            // 3 段编码：自动找空闲货位
-            locCode = code;
-            boxCode = '';
-          } else {
-            throw new Error('货位编码格式错误，应为 A-1-1-1（货架-列-层-盒）');
-          }
-
-          // 查找货位
-          location = await tx.location.findFirst({
-            where: {
-              code: locCode,
-              status: 1,
-              zone: { warehouseId: BigInt(warehouseId) },
-            },
-          });
-          if (!location) {
-            throw new Error('货位 ' + locCode + ' 不存在或已停用');
-          }
-
-          if (boxCode) {
-            // 4 段编码：找指定货位
-            targetBox = await tx.box.findFirst({
-              where: {
-                locationId: location.id,
-                code: boxCode,
-                status: 1,
-              },
-            });
-            if (!targetBox) {
-              throw new Error('货位 ' + boxCode + ' 不存在或已停用');
-            }
-            if (targetBox.remark && targetBox.remark.trim() !== '') {
-              throw new Error('货位 ' + boxCode + ' 已被占用（' + targetBox.remark + '）');
-            }
-          } else {
-            // 3 段编码：找空闲货位
-            targetBox = await tx.box.findFirst({
-              where: {
-                locationId: location.id,
-                status: 1,
-                OR: [{ remark: null }, { remark: '' }],
-              },
-              orderBy: { code: 'asc' },
-            });
-            if (!targetBox) {
-              throw new Error('货位 ' + locCode + ' 没有空闲货位');
-            }
-          }
-        } else if (locationId) {
-          location = await tx.location.findFirst({
-            where: {
-              id: BigInt(locationId),
-              status: 1,
-              zone: { warehouseId: BigInt(warehouseId) },
-            },
-          });
-          if (location) {
-            targetBox = await tx.box.findFirst({
-              where: {
-                locationId: location.id,
-                status: 1,
-                OR: [{ remark: null }, { remark: '' }],
-              },
-              orderBy: { code: 'asc' },
-            });
-          }
-        }
-        if (!location) {
-          throw new Error('货位不存在或已停用');
-        }
-        if (!targetBox) {
-          throw new Error('没有可用的空闲货位');
-        }
-
-        // 标记货位已占用（记录商品ID）
-        await tx.box.update({
-          where: { id: targetBox.id },
-          data: { remark: `product:${product.id}` },
-        });
-
-        // 自动生成批次号
-        const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-        const lotCount = await tx.inventoryLot.count({
-          where: { lotNumber: { startsWith: `LOT-${today}` } },
-        });
-        const lotNumber = `LOT-${today}-${String(lotCount + 1).padStart(3, '0')}`;
-
-        // 创建聚合库存记录（一个商品+一个仓库=一条）
-        const inv = await tx.inventory.create({
-          data: {
-            productId: product.id,
-            warehouseId: BigInt(warehouseId),
-            skuVariantId: 0,
-            onHand: stockQty,
-            locked: 0,
-            available: stockQty,
-            avgCost: costPrice > 0 ? costPrice : null,
-            version: 0,
-          },
-        });
-
-        // 创建货位明细（一个货位=一种商品，不限数量）
-        await tx.locationStock.create({
-          data: {
-            inventoryId: inv.id,
-            productId: product.id,
-            warehouseId: BigInt(warehouseId),
-            locationId: location.id,
-            lotNumber,
-            quantity: stockQty,
-          },
-        });
-
-        // 创建批次记录
-        await tx.inventoryLot.create({
-          data: {
-            productId: product.id,
-            warehouseId: BigInt(warehouseId),
-            lotNumber,
-            quantity: stockQty,
-            costPrice: costPrice > 0 ? costPrice : null,
-            status: 1,
-          },
-        });
-
-        // 创建入库流水
-        await tx.inventoryTransaction.create({
-          data: {
-            txnType: 'INBOUND',
-            refType: 'INITIAL',
-            refId: product.id,
-            refNo: `INIT-${code}`,
-            productId: product.id,
-            warehouseId: BigInt(warehouseId),
-            skuVariantId: 0,
-            lotNumber,
-            quantity: stockQty,
-            costPrice: costPrice > 0 ? costPrice : null,
-            beforeQty: 0,
-            afterQty: stockQty,
-            remark: `初始库存 - 批次 ${lotNumber}`,
-          },
-        });
+      // 2. 货位必须真实存在于该仓库（v1.1.1：不再走已废弃的 boxes 表）
+      const location = await tx.location.findFirst({
+        where: {
+          code: locationCodeNorm,
+          status: 1,
+          zone: { warehouseId: BigInt(warehouseId) },
+        },
+        select: { id: true, code: true },
+      });
+      if (!location) {
+        throw new AppError(
+          `货位「${locationCodeNorm}」在该仓库中不存在，请到「货架地图」确认编码（形如 A-01-01-01）`,
+          404
+        );
       }
+
+      // 3. 一个货位只能放同一种商品
+      await assertLocationAvailableFor(tx, { locationId: location.id, productId: product.id });
+
+      // 4. 批次号
+      const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const lotCount = await tx.inventoryLot.count({
+        where: { lotNumber: { startsWith: `LOT-${today}` } },
+      });
+      const lotNumber = `LOT-${today}-${String(lotCount + 1).padStart(3, '0')}`;
+
+      // 5. 库存主记录（带 locationId，货架地图才能显示）
+      const inv = await tx.inventory.create({
+        data: {
+          productId: product.id,
+          warehouseId: BigInt(warehouseId),
+          locationId: location.id,
+          skuVariantId: 0,
+          onHand: stockQty,
+          locked: 0,
+          available: stockQty,
+          avgCost: costPrice > 0 ? costPrice : null,
+          version: 0,
+        },
+      });
+
+      // 6. 货位明细（货架地图读的就是这张表）
+      await syncLocationStock(tx, {
+        inventoryId: inv.id,
+        productId: product.id,
+        warehouseId: BigInt(warehouseId),
+        locationId: location.id,
+        quantity: stockQty,
+        lotNumber,
+      });
+
+      // 7. 批次
+      await tx.inventoryLot.create({
+        data: {
+          productId: product.id,
+          warehouseId: BigInt(warehouseId),
+          lotNumber,
+          quantity: stockQty,
+          costPrice: costPrice > 0 ? costPrice : null,
+          status: 1,
+        },
+      });
+
+      // 8. 初始入库流水
+      await tx.inventoryTransaction.create({
+        data: {
+          txnType: 'INBOUND',
+          refType: 'INITIAL',
+          refId: product.id,
+          refNo: `INIT-${finalCode}`,
+          productId: product.id,
+          warehouseId: BigInt(warehouseId),
+          skuVariantId: 0,
+          lotNumber,
+          quantity: stockQty,
+          costPrice: costPrice > 0 ? costPrice : null,
+          beforeQty: 0,
+          afterQty: stockQty,
+          remark: `初始库存 - 货位 ${location.code} - 批次 ${lotNumber}`,
+        },
+      });
 
       return product;
     });
 
-    const _p = PLATFORM_NAMES[getClientPlatform()] || getClientPlatform(); await writeLog({ module: 'product', action: 'create', ip: getClientIp(), content: `新建商品 ${name} (${code}) [来源: ${_p}]`, refType: 'product', refId: result.id });
+    const _p = PLATFORM_NAMES[getClientPlatform()] || getClientPlatform();
+    await writeLog({
+      module: 'product',
+      action: 'create',
+      userId: (session.user as any)?.id,
+      ip: getClientIp(),
+      content: `新建商品 ${name} (${finalCode})${hasStock ? `，初始库存 ${stockQty} 存入 ${locationCodeNorm}` : ''} [来源: ${_p}]`,
+      refType: 'product',
+      refId: result.id,
+    });
+
     return NextResponse.json({ success: true, data: serializeBigInt(result) });
-  } catch (error: any) {
+  } catch (error) {
     return handleApiError(error);
   }
 }

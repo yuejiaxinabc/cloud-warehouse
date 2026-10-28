@@ -5,6 +5,7 @@ import { prisma } from './prisma';
 import { consumeCaptcha } from './captcha-store';
 import { hit, reset as resetRate, clientIp } from './rate-limit';
 import { secretUsable } from './env-guard';
+import { writeLog } from './log';
 
 /**
  * 登录防护策略（FIX-2026-1012）
@@ -105,11 +106,25 @@ export const authOptions: NextAuthOptions = {
         const passwordOk = await bcrypt.compare(password, hashToCheck);
 
         if (!user || !passwordOk) {
+          // 审计：失败登录也留痕（v1.1.1），只记账号与 IP，不记密码
+          await writeLog({
+            module: 'auth',
+            action: 'login_failed',
+            content: `登录失败：账号 ${username}，IP ${ip}`,
+            ip,
+          });
           throw new Error(GENERIC_ERROR);
         }
 
         if (user.status !== 1) {
           // 账号被禁用也应与「密码错误」不可区分
+          await writeLog({
+            module: 'auth',
+            action: 'login_failed',
+            userId: user.id,
+            content: `登录失败：账号 ${username} 已被禁用，IP ${ip}`,
+            ip,
+          });
           throw new Error(GENERIC_ERROR);
         }
 
@@ -119,6 +134,17 @@ export const authOptions: NextAuthOptions = {
         await prisma.user.update({
           where: { id: user.id },
           data: { lastLoginAt: new Date() },
+        });
+
+        // 审计：登录成功（v1.1.1 —— 之前这里完全没有写日志，导致「系统日志」永远空白）
+        await writeLog({
+          module: 'auth',
+          action: 'login',
+          userId: user.id,
+          content: `登录成功：${user.username}（${user.realName || ''}），IP ${ip}`,
+          refType: 'user',
+          refId: user.id,
+          ip,
         });
 
         const permissions = new Set<string>();

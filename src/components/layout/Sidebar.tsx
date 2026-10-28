@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { Layout, Menu, Avatar, Dropdown, Badge, Space, Typography, Tag, Button, Drawer } from "antd";
+import React, { useEffect, useMemo, useState } from "react";
+import { Layout, Menu, Avatar, Dropdown, Badge, Space, Typography, Tag, Button, Drawer, Tooltip } from "antd";
 import type { MenuProps } from "antd";
 import { useRouter, usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
@@ -11,39 +11,85 @@ import {
   BarChartOutlined, SettingOutlined, UserOutlined, BellOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, LogoutOutlined,
   QrcodeOutlined, TagsOutlined, FileExcelOutlined, ClusterOutlined,
-  DollarOutlined, ScanOutlined, FileTextOutlined,
-  ShopOutlined, TeamOutlined, MenuOutlined, AppstoreOutlined, ShoppingCartOutlined,
+  DollarOutlined, FileTextOutlined, ShopOutlined, TeamOutlined,
+  MenuOutlined, AppstoreOutlined, ShoppingCartOutlined, PieChartOutlined,
+  ScanOutlined, DownOutlined,
 } from "@ant-design/icons";
+import { LogoMark } from "@/components/brand/Logo";
 
 const { Sider, Header, Content } = Layout;
 const { Text } = Typography;
 
-const OPERATOR_PATHS = ["/", "/stock-out", "/inventory", "/stocktake", "/bom", "/customers", "/serial", "/labels", "/purchase-requests"];
+const APP_VERSION = "1.1.1";
+const COLLAPSE_KEY = "yc.sider.collapsed";
 
-const menuItems: MenuProps["items"] = [
+/** 分组菜单：默认折叠，点开才展开，避免一屏堆 23 个入口 */
+type NavNode = {
+  key: string;
+  icon?: React.ReactNode;
+  label: string;
+  children?: NavNode[];
+};
+
+const NAV: NavNode[] = [
   { key: "/", icon: <DashboardOutlined />, label: "工作台" },
-  { key: "/products", icon: <ShoppingOutlined />, label: "商品管理" },
-  { key: "/products/io", icon: <FileExcelOutlined />, label: "商品导入导出" },
-  { key: "/purchase-requests", icon: <ShoppingCartOutlined />, label: "购买申请" },
-  { key: "/stock-in", icon: <ImportOutlined />, label: "扫码入库" },
-  { key: "/stock-out", icon: <ExportOutlined />, label: "扫码出库" },
-  { key: "/inventory", icon: <DatabaseOutlined />, label: "库存查询" },
-  { key: "/inventory/analysis", icon: <BarChartOutlined />, label: "库存分析" },
-  { key: "/stocktake", icon: <ScanOutlined />, label: "盘点管理" },
-  { key: "/transfers", icon: <SwapOutlined />, label: "调拨管理" },
-  { key: "/warehouse", icon: <HomeOutlined />, label: "仓库管理" },
-  { key: "/shelf-map", icon: <AppstoreOutlined />, label: "货架地图" },
-  { key: "/suppliers", icon: <ShopOutlined />, label: "供应商管理" },
-  { key: "/customers", icon: <TeamOutlined />, label: "客户管理" },
-  { key: "/alerts", icon: <AlertOutlined />, label: "预警中心" },
-  { key: "/reports", icon: <BarChartOutlined />, label: "报表中心" },
-  { key: "/bom", icon: <ClusterOutlined />, label: "BOM管理" },
-  { key: "/serial", icon: <QrcodeOutlined />, label: "序列号追踪" },
-  { key: "/labels", icon: <TagsOutlined />, label: "条码打印" },
-  { key: "/export", icon: <FileExcelOutlined />, label: "Excel导出" },
-  { key: "/cost", icon: <DollarOutlined />, label: "成本核算" },
-  { key: "/logs", icon: <FileTextOutlined />, label: "操作日志" },
-  { key: "/settings", icon: <SettingOutlined />, label: "系统设置" },
+  {
+    key: "g-product",
+    icon: <ShoppingOutlined />,
+    label: "商品与主数据",
+    children: [
+      { key: "/products", icon: <ShoppingOutlined />, label: "商品管理" },
+      { key: "/products/io", icon: <FileExcelOutlined />, label: "导入 / 导出" },
+      { key: "/suppliers", icon: <ShopOutlined />, label: "供应商" },
+      { key: "/customers", icon: <TeamOutlined />, label: "客户" },
+      { key: "/bom", icon: <ClusterOutlined />, label: "BOM 清单" },
+    ],
+  },
+  {
+    key: "g-move",
+    icon: <SwapOutlined />,
+    label: "库存作业",
+    children: [
+      { key: "/stock-in", icon: <ImportOutlined />, label: "扫码入库" },
+      { key: "/stock-out", icon: <ExportOutlined />, label: "扫码出库" },
+      { key: "/purchase-requests", icon: <ShoppingCartOutlined />, label: "购买申请" },
+      { key: "/stocktake", icon: <ScanOutlined />, label: "盘点管理" },
+      { key: "/transfers", icon: <SwapOutlined />, label: "调拨管理" },
+    ],
+  },
+  {
+    key: "g-stock",
+    icon: <DatabaseOutlined />,
+    label: "库存与仓库",
+    children: [
+      { key: "/inventory", icon: <DatabaseOutlined />, label: "库存查询" },
+      { key: "/inventory/analysis", icon: <BarChartOutlined />, label: "库存分析" },
+      { key: "/shelf-map", icon: <AppstoreOutlined />, label: "货架地图" },
+      { key: "/warehouse", icon: <HomeOutlined />, label: "仓库管理" },
+      { key: "/alerts", icon: <AlertOutlined />, label: "预警中心" },
+    ],
+  },
+  {
+    key: "g-report",
+    icon: <PieChartOutlined />,
+    label: "报表与工具",
+    children: [
+      { key: "/reports", icon: <BarChartOutlined />, label: "报表中心" },
+      { key: "/serial", icon: <QrcodeOutlined />, label: "序列号追踪" },
+      { key: "/labels", icon: <TagsOutlined />, label: "条码打印" },
+      { key: "/export", icon: <FileExcelOutlined />, label: "Excel 导出" },
+      { key: "/cost", icon: <DollarOutlined />, label: "成本核算" },
+    ],
+  },
+  {
+    key: "g-system",
+    icon: <SettingOutlined />,
+    label: "系统",
+    children: [
+      { key: "/logs", icon: <FileTextOutlined />, label: "操作日志" },
+      { key: "/settings", icon: <SettingOutlined />, label: "系统设置" },
+    ],
+  },
 ];
 
 interface AlertItem {
@@ -55,27 +101,67 @@ interface AlertItem {
   createdAt: string;
 }
 
+/** 找出当前路径对应的菜单项与所属分组 */
+function resolveActive(pathname: string) {
+  const flat: NavNode[] = [];
+  const parents = new Map<string, string>();
+  for (const node of NAV) {
+    if (node.children) {
+      for (const child of node.children) {
+        flat.push(child);
+        parents.set(child.key, node.key);
+      }
+    } else {
+      flat.push(node);
+    }
+  }
+  const sorted = [...flat].sort((a, b) => b.key.length - a.key.length);
+  const hit =
+    sorted.find((item) => pathname === item.key) ||
+    sorted.find((item) => item.key !== "/" && pathname.startsWith(item.key + "/")) ||
+    null;
+  return { selectedKey: hit?.key ?? pathname, parentKey: hit ? parents.get(hit.key) : undefined };
+}
+
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const pathname = usePathname();
+  const pathname = usePathname() || "/";
   const { data: session } = useSession();
+
   const [collapsed, setCollapsed] = useState(false);
-  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [openKeys, setOpenKeys] = useState<string[]>([]);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [companyName] = useState("云仓智能仓储管理平台");
+  const companyName = "云仓智能仓储管理平台";
+
+  const { selectedKey, parentKey } = useMemo(() => resolveActive(pathname), [pathname]);
+
+  // 折叠状态记忆
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(COLLAPSE_KEY);
+      if (saved === "1") setCollapsed(true);
+    } catch {}
+  }, []);
 
   useEffect(() => {
-    const check = () => {
-      const mobile = window.innerWidth < 768;
+    const onResize = () => {
+      const mobile = window.innerWidth < 992;
       setIsMobile(mobile);
       if (mobile) setCollapsed(true);
     };
-    check();
-    window.addEventListener("resize", check);
-    return () => window.removeEventListener("resize", check);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  // 自动展开当前分组（用户手动点开的其它分组保持打开）
+  useEffect(() => {
+    if (!parentKey) return;
+    setOpenKeys((prev) => (prev.includes(parentKey) ? prev : [...prev, parentKey]));
+  }, [parentKey]);
 
   useEffect(() => {
     const fetchAlerts = async () => {
@@ -90,170 +176,215 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       } catch {}
     };
     fetchAlerts();
-    const interval = setInterval(fetchAlerts, 60000);
-    return () => clearInterval(interval);
+    const timer = setInterval(fetchAlerts, 60_000);
+    return () => clearInterval(timer);
   }, []);
 
-  const getFilteredMenu = (): MenuProps["items"] => {
-    const roles = (session?.user as any)?.roles || [];
-    if (roles.includes("ADMIN") || roles.includes("admin")) return menuItems;
-    if (roles.includes("operator")) return menuItems?.filter((item: any) => OPERATOR_PATHS.includes(item?.key));
-    return menuItems;
+  const toggleCollapsed = () => {
+    const next = !collapsed;
+    setCollapsed(next);
+    try {
+      window.localStorage.setItem(COLLAPSE_KEY, next ? "1" : "0");
+    } catch {}
   };
 
-  const getSelectedKey = () => {
-    if (pathname === "/") return "/";
-    const match = pathname.match(/^\/[^\/]+/);
-    return match ? match[0] : "/";
-  };
-
-  const handleMenuClick = (key: string) => {
+  const goto = (key: string) => {
     router.push(key);
-    if (isMobile) setMobileDrawerOpen(false);
+    if (isMobile) setMobileOpen(false);
   };
 
-  const alertMenu: MenuProps["items"] = alerts.length > 0
-    ? [
-        ...alerts.slice(0, 5).map((alert) => ({
-          key: alert.id,
-          label: (
-            <div style={{ maxWidth: 280, padding: "4px 0" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                <Tag color={alert.level === "CRITICAL" ? "red" : alert.level === "WARNING" ? "orange" : "blue"} style={{ margin: 0 }}>
-                  {alert.level === "CRITICAL" ? "紧急" : alert.level === "WARNING" ? "警告" : "提示"}
-                </Tag>
-                <Text strong style={{ fontSize: 13 }}>{alert.title}</Text>
+  const alertMenu: MenuProps["items"] =
+    alerts.length > 0
+      ? [
+          ...alerts.slice(0, 5).map((alert) => ({
+            key: alert.id,
+            label: (
+              <div style={{ maxWidth: 300, padding: "2px 0" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                  <Tag
+                    color={alert.level === "CRITICAL" ? "red" : alert.level === "WARNING" ? "orange" : "blue"}
+                    style={{ margin: 0 }}
+                  >
+                    {alert.level === "CRITICAL" ? "紧急" : alert.level === "WARNING" ? "警告" : "提示"}
+                  </Tag>
+                  <Text strong style={{ fontSize: 13 }}>{alert.title}</Text>
+                </div>
+                <Text type="secondary" style={{ fontSize: 12 }}>{alert.content}</Text>
               </div>
-              <Text type="secondary" style={{ fontSize: 12 }}>{alert.content}</Text>
-            </div>
-          ),
-          onClick: () => router.push("/alerts"),
-        })),
-        { type: "divider" },
-        { key: "view-all", label: <div style={{ textAlign: "center", color: "var(--primary)", fontSize: 13 }}>查看全部预警</div>, onClick: () => router.push("/alerts") },
-      ]
-    : [{ key: "empty", label: <div style={{ textAlign: "center", color: "var(--text-muted)", padding: 12, fontSize: 13 }}>暂无预警</div>, disabled: true }];
+            ),
+            onClick: () => goto("/alerts"),
+          })),
+          { type: "divider" as const },
+          {
+            key: "view-all",
+            label: <div style={{ textAlign: "center", color: "var(--primary)", fontSize: 13 }}>查看全部预警</div>,
+            onClick: () => goto("/alerts"),
+          },
+        ]
+      : [
+          {
+            key: "empty",
+            label: <div style={{ textAlign: "center", color: "var(--text-muted)", padding: 10, fontSize: 13 }}>暂无预警</div>,
+            disabled: true,
+          },
+        ];
 
   const userMenu: MenuProps["items"] = [
-    { key: "profile", icon: <UserOutlined />, label: "个人资料", onClick: () => router.push("/settings") },
+    { key: "profile", icon: <UserOutlined />, label: "个人资料", onClick: () => goto("/settings") },
     { type: "divider" },
-    { key: "logout", icon: <LogoutOutlined />, label: "退出登录", danger: true, onClick: () => signOut({ callbackUrl: "/login" }) },
+    {
+      key: "logout",
+      icon: <LogoutOutlined />,
+      label: "退出登录",
+      danger: true,
+      onClick: () => signOut({ callbackUrl: "/login" }),
+    },
   ];
 
-  const siderContent = (
-    <>
-      <div style={{
-        height: 56,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: collapsed ? "center" : "flex-start",
-        padding: collapsed ? "0" : "0 14px",
-        borderBottom: "1px solid var(--border-light)",
-      }}>
-        <div style={{
-          width: 32, height: 32, borderRadius: 8,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          flexShrink: 0, overflow: "hidden", background: "#fff",
-          border: "1px solid var(--border)",
-        }}>
-          <img src="/logo.png" alt="" style={{ width: 32, height: 32, objectFit: "cover" }} />
+  const menuItems = useMemo<MenuProps["items"]>(
+    () =>
+      NAV.map((node) => ({
+        key: node.key,
+        icon: node.icon,
+        label: node.label,
+        children: node.children?.map((c) => ({ key: c.key, icon: c.icon, label: c.label })),
+      })),
+    []
+  );
+
+  const nav = (
+    <div className="yc-nav">
+      <div className={`yc-nav-brand ${collapsed ? "is-collapsed" : ""}`}>
+        <div className="yc-nav-brand-inner" onClick={() => goto("/")}>
+          {collapsed ? (
+            <LogoMark size={34} />
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+              <LogoMark size={34} />
+              <div style={{ lineHeight: 1.25, minWidth: 0 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text)", letterSpacing: 0.4 }}>云仓</div>
+                <div style={{ fontSize: 11, color: "var(--text-muted)", whiteSpace: "nowrap" }}>智能仓储管理平台</div>
+              </div>
+            </div>
+          )}
         </div>
-        {!collapsed && (
-          <span style={{ color: "var(--text)", fontSize: 15, fontWeight: 600, marginLeft: 10, whiteSpace: "nowrap" }}>
-            {companyName}
-          </span>
+        {!collapsed && !isMobile && (
+          <Tooltip title="收起菜单" placement="right">
+            <button className="yc-nav-collapse" onClick={toggleCollapsed} aria-label="收起菜单">
+              <MenuFoldOutlined />
+            </button>
+          </Tooltip>
         )}
       </div>
+
       <Menu
-        theme="light"
         mode="inline"
-        selectedKeys={[getSelectedKey()]}
-        items={getFilteredMenu()}
-        onClick={({ key }) => handleMenuClick(key)}
-        style={{ borderRight: "none", marginTop: 6 }}
+        className="yc-menu"
+        selectedKeys={[selectedKey]}
+        openKeys={collapsed ? undefined : openKeys}
+        onOpenChange={(keys) => setOpenKeys(keys as string[])}
+        items={menuItems}
+        inlineIndent={16}
+        onClick={({ key }) => {
+          if (String(key).startsWith("g-")) return;
+          goto(key);
+        }}
       />
-    </>
+
+      {!collapsed && (
+        <div className="yc-nav-foot">
+          <span>v{APP_VERSION}</span>
+          <span>{new Date().getFullYear()} · 云仓</span>
+        </div>
+      )}
+    </div>
   );
 
   return (
-    <Layout style={{ minHeight: "100dvh" }}>
+    <Layout style={{ minHeight: "100dvh", background: "var(--bg)" }}>
       {!isMobile && (
         <Sider
+          width={236}
+          collapsedWidth={72}
           collapsed={collapsed}
-          width={220}
-          collapsedWidth={56}
+          trigger={null}
+          className="yc-sider"
           style={{
-            overflow: "auto", height: "100dvh",
-            position: "fixed", left: 0, top: 0, bottom: 0,
-            background: "#fff", zIndex: 200,
+            position: "fixed",
+            inset: "0 auto 0 0",
+            height: "100dvh",
+            zIndex: 200,
+            overflow: "hidden",
           }}
         >
-          {siderContent}
+          {nav}
         </Sider>
       )}
 
       {isMobile && (
         <Drawer
           placement="left"
-          onClose={() => setMobileDrawerOpen(false)}
-          open={mobileDrawerOpen}
-          width={260}
-          styles={{ body: { padding: 0, background: "#fff" } }}
+          open={mobileOpen}
+          onClose={() => setMobileOpen(false)}
+          width={252}
           closable={false}
+          styles={{ body: { padding: 0 } }}
         >
-          {siderContent}
+          {nav}
         </Drawer>
       )}
 
-      <Layout style={{ marginLeft: isMobile ? 0 : collapsed ? 56 : 220, transition: "margin-left 0.2s ease" }}>
-        <Header style={{
-          padding: isMobile ? "0 12px" : "0 20px",
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          position: "sticky", top: 0, zIndex: 100,
-          height: 56, lineHeight: "56px",
-        }}>
-          <Space>
+      <Layout
+        style={{
+          marginLeft: isMobile ? 0 : collapsed ? 72 : 236,
+          transition: "margin-left .22s cubic-bezier(.16,1,.3,1)",
+          background: "var(--bg)",
+        }}
+      >
+        <Header className="yc-header">
+          <Space size={10}>
             {isMobile && (
-              <Button type="text" icon={<MenuOutlined />} onClick={() => setMobileDrawerOpen(true)} style={{ fontSize: 18, color: "var(--text)" }} />
+              <Button type="text" icon={<MenuOutlined />} onClick={() => setMobileOpen(true)} />
             )}
-            {!isMobile && (
-              <Button
-                type="text"
-                icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-                onClick={() => setCollapsed(!collapsed)}
-                style={{ fontSize: 16, color: "var(--text-secondary)" }}
-              />
+            {!isMobile && collapsed && (
+              <Tooltip title="展开菜单" placement="right">
+                <Button type="text" icon={<MenuUnfoldOutlined />} onClick={toggleCollapsed} />
+              </Tooltip>
             )}
           </Space>
 
-          <Space size={isMobile ? 8 : 14}>
+          <Space size={isMobile ? 6 : 16}>
             <Dropdown menu={{ items: alertMenu }} placement="bottomRight" trigger={["click"]}>
-              <Badge count={unreadCount} size="small" offset={[-2, 4]}>
-                <BellOutlined style={{ fontSize: isMobile ? 16 : 18, color: "var(--text-secondary)", cursor: "pointer" }} />
+              <Badge count={unreadCount} size="small" offset={[-2, 3]}>
+                <button className="yc-icon-btn" aria-label="预警">
+                  <BellOutlined />
+                </button>
               </Badge>
             </Dropdown>
+
             <Dropdown menu={{ items: userMenu }} placement="bottomRight" trigger={["click"]}>
-              <Space style={{ cursor: "pointer" }} size={8}>
+              <div className="yc-user">
                 <Avatar
-                  icon={<UserOutlined />}
-                  style={{ background: "var(--primary)", width: isMobile ? 28 : 32, height: isMobile ? 28 : 32, fontSize: isMobile ? 13 : 15 }}
-                />
-                {!isMobile && <span style={{ color: "var(--text)", fontSize: 14, fontWeight: 500 }}>{session?.user?.name || "用户"}</span>}
-              </Space>
+                  size={isMobile ? 26 : 30}
+                  style={{ background: "linear-gradient(135deg,#3B82F6,#1D4ED8)", fontSize: 13 }}
+                >
+                  {(session?.user?.name || "用").slice(0, 1)}
+                </Avatar>
+                {!isMobile && (
+                  <div className="yc-user-meta">
+                    <span className="yc-user-name">{session?.user?.name || "用户"}</span>
+                    <span className="yc-user-role">
+                      {((session?.user as any)?.roles || [])[0] || "member"}
+                    </span>
+                  </div>
+                )}
+                {!isMobile && <DownOutlined className="yc-user-caret" />}
+              </div>
             </Dropdown>
           </Space>
         </Header>
 
-        <Content style={{ padding: isMobile ? 12 : 20, minHeight: "calc(100dvh - 56px)" }}>
-          {children}
-        </Content>
-
-        <div style={{
-          textAlign: "center", padding: isMobile ? "12px 0" : "16px 0",
-          color: "var(--text-muted)", fontSize: isMobile ? 11 : 12,
-        }}>
-          © {new Date().getFullYear()} {companyName}
-        </div>
+        <Content className="yc-content">{children}</Content>
       </Layout>
     </Layout>
   );

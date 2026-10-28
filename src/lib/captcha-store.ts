@@ -41,6 +41,31 @@ export function issueCaptcha(len = 4): { token: string; text: string } {
 }
 
 /**
+ * 只校验、不消费（v1.1.1）。
+ *
+ * 登录页在提交前先调这里，用它可以给出「验证码错误 / 已过期」的精确提示，
+ * 而不会泄露账号是否存在。真正的消费仍在 authorize() 里做，绕过前端依旧无意义。
+ */
+export function checkCaptcha(token: string, answer: string): { ok: boolean; error?: string } {
+  if (!token || typeof token !== 'string') {
+    return { ok: false, error: '验证码参数错误，请点击图片刷新' };
+  }
+  const entry = store.get(token);
+  if (!entry) return { ok: false, error: '验证码已过期，请点击图片刷新' };
+  if (Date.now() > entry.expiresAt) {
+    store.delete(token);
+    return { ok: false, error: '验证码已过期，请点击图片刷新' };
+  }
+
+  const input = String(answer ?? '').trim();
+  if (!input) return { ok: false, error: '请输入验证码' };
+  if (entry.text.toLowerCase() !== input.toLowerCase()) {
+    return { ok: false, error: '验证码错误，请重新输入' };
+  }
+  return { ok: true };
+}
+
+/**
  * 一次性消费验证码。无论成功失败都会销毁票据，防止重放与爆破。
  */
 export function consumeCaptcha(token: string, answer: string): { ok: boolean; error?: string } {

@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { serializeBigInt } from "@/lib/serialize";
 import { requireAuth } from '@/lib/auth-guard';
 import { ensureShelves } from '@/lib/shelf-init';
+import { writeLog, getClientIp } from '@/lib/log';
 
 export async function GET(req: NextRequest) {
     await requireAuth(req);
@@ -52,9 +53,10 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-    await requireAuth(req);
+  const auth = await requireAuth(req);
   try {
     const body = await req.json();
+    const uid = (auth as any)?.session?.user?.id;
     
     // 使用事务创建仓库、货架、货位（每个货位10个小货位）
     const result = await prisma.$transaction(async (tx) => {
@@ -79,6 +81,17 @@ export async function POST(req: NextRequest) {
       return warehouse;
     });
 
+    // v1.1.1：建仓写审计日志（此前完全没记录，操作日志页永远空白）
+    await writeLog({
+      module: 'warehouse',
+      action: 'create',
+      userId: uid,
+      ip: getClientIp(),
+      content: `新建仓库 ${body.name}（${body.code}），已自动生成 A–Z 26 个货架 × 100 个货位`,
+      refType: 'warehouse',
+      refId: result.id,
+    });
+
     return NextResponse.json(serializeBigInt({ success: true, data: result }));
   } catch (error: any) {
     return NextResponse.json(serializeBigInt({ success: false, error: error.message }), { status: 500 });
@@ -86,8 +99,9 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PUT(req: NextRequest) {
-    await requireAuth(req);
+  const auth = await requireAuth(req);
   try {
+    const uid = (auth as any)?.session?.user?.id;
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
     if (!id) return NextResponse.json(serializeBigInt({ success: false, error: "缺少ID" }), { status: 400 });
@@ -103,6 +117,15 @@ export async function PUT(req: NextRequest) {
         phone: body.phone || null,
         remark: body.remark || null,
       },
+    });
+    await writeLog({
+      module: 'warehouse',
+      action: 'update',
+      userId: uid,
+      ip: getClientIp(),
+      content: `编辑仓库 ${warehouse.name}（${warehouse.code}）`,
+      refType: 'warehouse',
+      refId: warehouse.id,
     });
     return NextResponse.json(serializeBigInt({ success: true, data: warehouse }));
   } catch (error: any) {

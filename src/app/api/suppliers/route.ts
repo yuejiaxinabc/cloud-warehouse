@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
 import { requireAuth } from '@/lib/auth-guard';
+import { writeLog, getClientIp } from '@/lib/log';
 
 export async function GET(req: NextRequest) {
     await requireAuth(req);
@@ -64,6 +65,15 @@ export async function POST(req: NextRequest) {
       data: { name, code, contact, phone, email, address, bankAccount, bankName, taxNo, remark },
     });
 
+    await writeLog({
+      module: 'supplier',
+      action: 'create',
+      ip: getClientIp(),
+      content: `新建供应商 ${name}（${code}）`,
+      refType: 'supplier',
+      refId: supplier.id,
+    });
+
     return NextResponse.json({ success: true, data: serializeBigInt(supplier) });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
@@ -81,6 +91,15 @@ export async function PUT(req: NextRequest) {
     const supplier = await prisma.supplier.update({
       where: { id: Number(id) },
       data,
+    });
+
+    await writeLog({
+      module: 'supplier',
+      action: 'update',
+      ip: getClientIp(),
+      content: `编辑供应商 ${supplier.name}（${supplier.code}）`,
+      refType: 'supplier',
+      refId: supplier.id,
     });
 
     return NextResponse.json({ success: true, data: serializeBigInt(supplier) });
@@ -101,7 +120,15 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, error: '该供应商有关联入库单，无法删除' }, { status: 400 });
     }
 
-    await prisma.supplier.delete({ where: { id: Number(id) } });
+    const deletedSupplier = await prisma.supplier.delete({ where: { id: Number(id) } });
+    await writeLog({
+      module: 'supplier',
+      action: 'delete',
+      ip: getClientIp(),
+      content: `删除供应商 ${deletedSupplier.name}（${deletedSupplier.code}）`,
+      refType: 'supplier',
+      refId: deletedSupplier.id,
+    });
     return NextResponse.json({ success: true });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });

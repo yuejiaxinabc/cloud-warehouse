@@ -1,726 +1,746 @@
 'use client';
 
-import React, { useState, useEffect } from "react";
-import { Card, Table, Button, Space, Input, Select, Tag, Row, Col, Modal, Form, message, Typography, InputNumber, Drawer, Descriptions, List, Popconfirm, Tabs, Statistic, Divider, Alert, Upload } from "antd";
-import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined, EyeOutlined, AppstoreOutlined, HistoryOutlined, DollarOutlined, HomeOutlined, EnvironmentOutlined, InfoCircleOutlined, UploadOutlined } from "@ant-design/icons";
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  App, Avatar, Button, Card, Col, Drawer, Empty, Form, Input, InputNumber,
+  List, Modal, Popconfirm, Row, Select, Space, Table, Tag, Tooltip, Typography, Upload,
+} from 'antd';
+import type { ColumnsType } from 'antd/es/table';
+import {
+  AppstoreOutlined, DeleteOutlined, EditOutlined, FileExcelOutlined,
+  HistoryOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, UploadOutlined,
+} from '@ant-design/icons';
 
-
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { Option } = Select;
 
+/** 统一解析响应：500 空 body 时不再只显示「操作失败」 */
+async function readJson(res: Response) {
+  const raw = await res.text();
+  let data: any = null;
+  try {
+    data = raw ? JSON.parse(raw) : null;
+  } catch {
+    data = null;
+  }
+  if (!data) {
+    throw new Error(`服务异常（HTTP ${res.status}），请稍后重试或联系管理员查看日志`);
+  }
+  return data;
+}
+
+type ProductRow = {
+  id: string;
+  code: string;
+  name: string;
+  barcode?: string;
+  imageUrl?: string;
+  status: number;
+  totalStock?: number;
+  unit?: { name?: string };
+  category?: { name?: string };
+  costMethod?: string;
+};
+
 export default function ProductsPage() {
-  const [keyword, setKeyword] = useState("");
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [categoryModalOpen, setCategoryModalOpen] = useState(false);
-  const [unitModalOpen, setUnitModalOpen] = useState(false);
-  const [detailOpen, setDetailOpen] = useState(false);
-  const [selectedProduct, setSelectedProduct] = useState<any>(null);
-  const [priceHistory, setPriceHistory] = useState<any>(null);
-  const [priceLoading, setPriceLoading] = useState(false);
-  const [products, setProducts] = useState<any[]>([]);
+  const { message } = App.useApp();
+
+  const [rows, setRows] = useState<ProductRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(15);
+  const [keyword, setKeyword] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState<string | undefined>();
+  const [statusFilter, setStatusFilter] = useState<string | undefined>();
+  const [loading, setLoading] = useState(false);
+
   const [categories, setCategories] = useState<any[]>([]);
   const [units, setUnits] = useState<any[]>([]);
   const [warehouses, setWarehouses] = useState<any[]>([]);
-  const [availableLocations, setAvailableLocations] = useState<any[]>([]);
-  const [selectedWarehouseId, setSelectedWarehouseId] = useState<string>('');
-      const [locationCodeInput, setLocationCodeInput] = useState<string>('');
-  const [initialStockVal, setInitialStockVal] = useState<number>(0);
-  const [initialCostVal, setInitialCostVal] = useState<number>(0);
-  const [selectedLocationId, setSelectedLocationId] = useState<string>('');
-  const [loading, setLoading] = useState(false);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
+
+  const [formOpen, setFormOpen] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm();
+
+  const [warehouseId, setWarehouseId] = useState<string | undefined>();
+  const [locationCode, setLocationCode] = useState<string | undefined>();
+  const [locations, setLocations] = useState<any[]>([]);
+  const [locationsLoading, setLocationsLoading] = useState(false);
+  const [imageUrl, setImageUrl] = useState('');
+  const [fileList, setFileList] = useState<any[]>([]);
+
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detail, setDetail] = useState<ProductRow | null>(null);
+  const [priceHistory, setPriceHistory] = useState<any[]>([]);
+  const [priceLoading, setPriceLoading] = useState(false);
+
+  const [categoryModal, setCategoryModal] = useState(false);
+  const [unitModal, setUnitModal] = useState(false);
   const [catForm] = Form.useForm();
   const [unitForm] = Form.useForm();
-  const [editId, setEditId] = useState<number | null>(null);
-  const [imageUrl, setImageUrl] = useState("");
-  const [isMobile, setIsMobile] = useState(false);
-  const [fileList, setFileList] = useState<any[]>([]);
-  const [locationsLoading, setLocationsLoading] = useState(false);
 
-
-  useEffect(() => {
-    const checkMobile = () => setIsMobile(window.innerWidth < 768);
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-    return () => window.removeEventListener('resize', checkMobile);
-  }, []);
-
-  const loadProducts = async () => {
+  const loadProducts = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (keyword) params.set("keyword", keyword);
-      params.set("page", String(page));
-      params.set("pageSize", "15");
-      const res = await fetch(`/api/products?${params}`);
-      const data = await res.json();
+      if (keyword.trim()) params.set('keyword', keyword.trim());
+      if (categoryFilter) params.set('categoryId', categoryFilter);
+      if (statusFilter !== undefined && statusFilter !== '') params.set('status', statusFilter);
+      params.set('page', String(page));
+      params.set('pageSize', String(pageSize));
+
+      const res = await fetch(`/api/products?${params}`, { cache: 'no-store' });
+      const data = await readJson(res);
       if (data.success) {
-        setProducts(data.data.items || []);
-        setTotal(data.data.total || 0);
+        setRows(data.data?.items || []);
+        setTotal(data.data?.total || 0);
+      } else {
+        message.error(data.error || '加载商品列表失败');
       }
-    } catch (e) { console.error(e); }
-    setLoading(false);
-  };
+    } catch (e: any) {
+      message.error(e?.message || '加载商品列表失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [keyword, categoryFilter, statusFilter, page, pageSize, message]);
 
-  const loadCategories = async () => {
+  const loadMeta = useCallback(async () => {
     try {
-      const res = await fetch("/api/products/categories");
-      const data = await res.json();
-      if (data.success) setCategories(data.data || []);
-    } catch (e) { console.error(e); }
-  };
+      const [cats, us, whs] = await Promise.all([
+        fetch('/api/products/categories', { cache: 'no-store' }).then(readJson),
+        fetch('/api/products/units', { cache: 'no-store' }).then(readJson),
+        fetch('/api/warehouse', { cache: 'no-store' }).then(readJson),
+      ]);
+      if (cats.success) setCategories(cats.data || []);
+      if (us.success) setUnits(us.data || []);
+      if (whs.success) setWarehouses(whs.data || []);
+    } catch (e: any) {
+      message.error(e?.message || '基础数据加载失败');
+    }
+  }, [message]);
 
-  const loadUnits = async () => {
-    try {
-      const res = await fetch("/api/products/units");
-      const data = await res.json();
-      if (data.success) setUnits(data.data || []);
-    } catch (e) { console.error(e); }
-  };
+  useEffect(() => { loadProducts(); }, [loadProducts]);
+  useEffect(() => { loadMeta(); }, [loadMeta]);
 
-  const loadWarehouses = async () => {
-    try {
-      const res = await fetch("/api/warehouse");
-      const data = await res.json();
-      if (data.success) setWarehouses(data.data || []);
-    } catch (e) { console.error(e); }
-  };
-
-  // 加载可用货位（按顺序，显示剩余容量）
-  const loadAvailableLocations = async (warehouseId: number) => {
+  /** 载入仓库下的空货位，供下拉选择（v1.1.1：不再让用户手打编码） */
+  const loadLocations = useCallback(async (whId: string) => {
     setLocationsLoading(true);
     try {
-      const res = await fetch(`/api/warehouse/locations/available?warehouseId=${warehouseId}`);
-      const data = await res.json();
-      if (data.success) {
-        setAvailableLocations(data.data || []);
-      }
-    } catch (e) { console.error(e); }
-    setLocationsLoading(false);
+      const res = await fetch(`/api/warehouse/locations?warehouseId=${whId}&empty=1&limit=400`, { cache: 'no-store' });
+      const data = await readJson(res);
+      if (data.success) setLocations(data.data || []);
+      else message.error(data.error || '货位加载失败');
+    } catch (e: any) {
+      message.error(e?.message || '货位加载失败');
+    } finally {
+      setLocationsLoading(false);
+    }
+  }, [message]);
+
+  const resetForm = useCallback(() => {
+    form.resetFields();
+    setEditId(null);
+    setWarehouseId(undefined);
+    setLocationCode(undefined);
+    setLocations([]);
+    setImageUrl('');
+    setFileList([]);
+  }, [form]);
+
+  const openCreate = () => {
+    resetForm();
+    setFormOpen(true);
   };
 
-  const loadPriceHistory = async (productId: number) => {
+  const openEdit = (record: ProductRow) => {
+    resetForm();
+    setEditId(record.id);
+    form.setFieldsValue({
+      code: record.code,
+      name: record.name,
+      barcode: record.barcode || undefined,
+      categoryId: (record as any).categoryId || undefined,
+      unitId: (record as any).unitId || undefined,
+      costMethod: record.costMethod || 'WEIGHTED',
+      status: record.status,
+      safetyStock: (record as any).safetyStock ?? undefined,
+      maxStock: (record as any).maxStock ?? undefined,
+      spec: (record as any).spec || undefined,
+      brand: (record as any).brand || undefined,
+      model: (record as any).model || undefined,
+      remark: (record as any).remark || undefined,
+      salePrice: (record as any).salePrice ?? undefined,
+      defaultCost: (record as any).defaultCost ?? undefined,
+    });
+    setImageUrl(record.imageUrl || '');
+    setFileList(record.imageUrl ? [{ uid: '-1', name: 'cover.png', status: 'done', url: record.imageUrl }] : []);
+    setFormOpen(true);
+  };
+
+  const closeForm = () => {
+    setFormOpen(false);
+    // v1.1.1：关闭即清空，避免上次填的仓库/货位/数量残留
+    resetForm();
+  };
+
+  const submit = async () => {
+    let values: any;
+    try {
+      values = await form.validateFields();
+    } catch {
+      return;
+    }
+
+    if (!editId) {
+      if (!warehouseId) { message.warning('请选择所属仓库'); return; }
+      if (!locationCode) { message.warning('请选择存放货位'); return; }
+      if (!values.initialStock || Number(values.initialStock) <= 0) {
+        message.warning('请填写初始库存数量（大于 0）');
+        return;
+      }
+    }
+
+    setSubmitting(true);
+    try {
+      const body: any = { ...values, imageUrl: imageUrl || null };
+      if (editId) body.id = editId;
+      else {
+        body.warehouseId = Number(warehouseId);
+        body.locationCode = locationCode;
+        body.initialStock = Number(values.initialStock);
+        body.initialCost = Number(values.initialCost || 0);
+      }
+
+      const res = await fetch('/api/products', {
+        method: editId ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await readJson(res);
+
+      if (data.success) {
+        message.success(editId ? '商品已更新' : '商品创建成功');
+        closeForm();
+        loadProducts();
+        loadMeta();
+      } else {
+        // 直接展示后端给出的具体原因
+        message.error({ content: data.error || '保存失败', duration: 5 });
+      }
+    } catch (e: any) {
+      message.error({ content: e?.message || '保存失败', duration: 5 });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const remove = async (id: string) => {
+    try {
+      const res = await fetch(`/api/products?id=${id}`, { method: 'DELETE' });
+      const data = await readJson(res);
+      if (data.success) {
+        message.success('已删除');
+        loadProducts();
+      } else {
+        message.error(data.error || '删除失败');
+      }
+    } catch (e: any) {
+      message.error(e?.message || '删除失败');
+    }
+  };
+
+  const openDetail = async (record: ProductRow) => {
+    setDetail(record);
+    setDetailOpen(true);
     setPriceLoading(true);
     try {
-      const res = await fetch(`/api/products/${productId}/price-history`);
-      const data = await res.json();
-      if (data.success) {
-        setPriceHistory(data.data);
-      }
-    } catch (e) { console.error(e); }
-    setPriceLoading(false);
-  };
-
-  useEffect(() => { loadProducts(); loadCategories(); loadUnits(); loadWarehouses(); }, [page, keyword]);
-
-  const handleViewDetail = (record: any) => {
-    setSelectedProduct(record);
-    setDetailOpen(true);
-    loadPriceHistory(record.id);
-  };
-
-  const handleDelete = async (id: number) => {
-    try {
-      const res = await fetch(`/api/products?id=${id}`, { method: "DELETE" });
-      const data = await res.json();
-      if (data.success) {
-        message.success("删除成功");
-        loadProducts();
-      } else {
-        message.error(data.error || "删除失败");
-      }
-    } catch (e) {
-      message.error("删除失败");
+      const data = await fetch(`/api/products/${record.id}/price-history`, { cache: 'no-store' }).then(readJson);
+      setPriceHistory(data.success ? data.data?.records || [] : []);
+    } catch {
+      setPriceHistory([]);
+    } finally {
+      setPriceLoading(false);
     }
   };
 
-  
-
-  const handleSubmit = async () => {
-    try {
-      const values = await form.validateFields();
-      // 手动验证仓库库位
-      if (!editId) {
-        if (!selectedWarehouseId) { message.warning('请选择仓库'); return; }
-        if (!locationCodeInput.trim()) { message.warning('请输入货位编码'); return; }
-        const locParts = locationCodeInput.trim().split('-');
-        if (locParts.length !== 4) { message.warning('货位格式错误，应为 如 A-1-1-1'); return; }
-        if (!initialStockVal || initialStockVal <= 0) { message.warning('请输入初始数量'); return; }
-      }
-      const url = editId ? "/api/products" : "/api/products";
-      const method = editId ? "PUT" : "POST";
-      let body: any;
-      if (editId) {
-        body = { ...values, id: editId, imageUrl: imageUrl || null };
-      } else {
-        body = {
-          ...values,
-          imageUrl: imageUrl || null,
-          warehouseId: Number(selectedWarehouseId),
-          locationCode: locationCodeInput.trim(),
-          initialStock: initialStockVal,
-          initialCost: initialCostVal || 0,
-        };
-      }
-      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const data = await res.json();
-      if (data.success) {
-        message.success(editId ? "更新成功" : "创建成功");
-        setCreateModalOpen(false);
-        form.resetFields();
-        setEditId(null); setSelectedWarehouseId(""); setSelectedLocationId(""); setLocationCodeInput("");
-        setInitialStockVal(0); setInitialCostVal(0);
-        setAvailableLocations([]);
-        loadProducts();
-      } else {
-        message.error(data.error || "操作失败");
-      }
-    } catch (e: any) {
-      if (e.errorFields) return;
-      message.error("操作失败");
-    }
-  };
-
-  const handleCreateCategory = async () => {
+  const createCategory = async () => {
     try {
       const values = await catForm.validateFields();
-      const res = await fetch("/api/products/categories", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values) });
-      const data = await res.json();
+      const data = await fetch('/api/products/categories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(values),
+      }).then(readJson);
       if (data.success) {
-        message.success("分类创建成功");
-        setCategoryModalOpen(false);
+        message.success('分类已创建');
         catForm.resetFields();
-        loadCategories();
-      } else {
-        message.error(data.error || "创建失败");
-      }
+        loadMeta();
+      } else message.error(data.error || '创建失败');
     } catch (e: any) {
-      if (e.errorFields) return;
-      message.error("创建失败");
+      if (e?.errorFields) return;
+      message.error(e?.message || '创建失败');
     }
   };
 
-  const handleDeleteCategory = async (id: number) => {
-    try {
-      const res = await fetch(`/api/products/categories?id=${id}`, { method: "DELETE" });
-      const data = await res.json();
-      if (data.success) {
-        message.success("分类删除成功");
-        loadCategories();
-      } else {
-        message.error(data.error || "删除失败");
-      }
-    } catch (e) {
-      message.error("删除失败");
-    }
-  };
-
-  const handleCreateUnit = async () => {
+  const createUnit = async () => {
     try {
       const values = await unitForm.validateFields();
-      const res = await fetch("/api/products/units", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values) });
-      const data = await res.json();
+      const data = await fetch('/api/products/units', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(values),
+      }).then(readJson);
       if (data.success) {
-        message.success("单位创建成功");
-        setUnitModalOpen(false);
+        message.success('单位已创建');
         unitForm.resetFields();
-        loadUnits();
-      } else {
-        message.error(data.error || "创建失败");
-      }
+        loadMeta();
+      } else message.error(data.error || '创建失败');
     } catch (e: any) {
-      if (e.errorFields) return;
-      message.error("创建失败");
+      if (e?.errorFields) return;
+      message.error(e?.message || '创建失败');
     }
   };
 
-  const handleDeleteUnit = async (id: number) => {
-    try {
-      const res = await fetch(`/api/products/units?id=${id}`, { method: "DELETE" });
-      const data = await res.json();
-      if (data.success) {
-        message.success("单位删除成功");
-        loadUnits();
-      } else {
-        message.error(data.error || "删除失败");
-      }
-    } catch (e) {
-      message.error("删除失败");
-    }
-  };
-
-
-
-  const columns = [
-    { title: "图片", dataIndex: "imageUrl", key: "imageUrl", width: 60, render: (url: string) => url ? <img src={url} alt="" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4 }} /> : <span style={{ color: '#ccc' }}>—</span> },
-    { title: "SKU", dataIndex: "code", key: "code", width: isMobile ? 80 : 100, render: (t: string) => <span style={{ fontFamily: "monospace", fontSize: isMobile ? 12 : 14 }}>{t}</span> },
-    { title: "商品名称", dataIndex: "name", key: "name", width: isMobile ? 100 : 160, ellipsis: true },
-    { title: "分类", dataIndex: ["category", "name"], key: "category", width: isMobile ? 70 : 100, render: (_: any, r: any) => r.category?.name || "-" },
-    ...(!isMobile ? [
-      { title: "单位", dataIndex: "unit", key: "unit", width: 60, render: (_: any, r: any) => r.unit?.name || r.unit || "-" },
-      { title: "条码", dataIndex: "barcode", key: "barcode", width: 120, render: (t: string) => t || "-" },
-      { title: "成本方法", dataIndex: "costMethod", key: "costMethod", width: 90, render: (t: string) => ({ WEIGHTED: "移动加权", FIFO: "先进先出", MONTHLY: "月度加权" } as Record<string, string>)[t] || t || "移动加权" },
-    ] : []),
-    { title: "库存", dataIndex: "totalStock", key: "totalStock", width: isMobile ? 60 : 80, render: (v: any) => <Text strong>{v || 0}</Text> },
-    { title: "状态", dataIndex: "status", key: "status", width: isMobile ? 50 : 70, render: (s: number) => <Tag color={s === 1 ? "green" : "red"}>{s === 1 ? "启用" : "停用"}</Tag> },
+  const columns = useMemo<ColumnsType<ProductRow>>(() => [
     {
-      title: "操作", key: "action", width: isMobile ? 80 : 150, fixed: "right" as const,
-      render: (_: any, record: any) => (
-        <Space size={isMobile ? 0 : 4}>
-          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => handleViewDetail(record)}>{isMobile ? "" : "详情"}</Button>
-          {!isMobile && (
-            <>
-              <Button type="link" size="small" icon={<EditOutlined />} onClick={() => {
-                setEditId(record.id); setImageUrl(record.imageUrl || ""); setFileList(record.imageUrl ? [{ uid: "-1", name: "图片", status: "done", url: record.imageUrl }] : []);
-                form.setFieldsValue(record);
-                setCreateModalOpen(true);
-              }}>编辑</Button>
-              <Popconfirm title="确定删除此商品？" onConfirm={() => handleDelete(record.id)} okText="确定" cancelText="取消">
-                <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
-              </Popconfirm>
-            </>
-          )}
+      title: '商品',
+      key: 'product',
+      width: 300,
+      render: (_, r) => (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          <Avatar shape="square" size={36} src={r.imageUrl || undefined} style={{ background: '#EFF6FF', color: '#2563EB', flexShrink: 0 }}>
+            {(r.name || '?').slice(0, 1)}
+          </Avatar>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {r.name}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+              {r.code}
+            </div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: '分类',
+      key: 'category',
+      width: 110,
+      responsive: ['lg'],
+      render: (_, r) => (r.category?.name ? <Tag bordered={false} color="blue">{r.category.name}</Tag> : <Text type="secondary">—</Text>),
+    },
+    {
+      title: '单位',
+      key: 'unit',
+      width: 70,
+      responsive: ['lg'],
+      render: (_, r) => r.unit?.name || <Text type="secondary">—</Text>,
+    },
+    {
+      title: '当前库存',
+      dataIndex: 'totalStock',
+      key: 'totalStock',
+      width: 100,
+      align: 'right',
+      render: (v: number) => <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{Number(v || 0)}</span>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 88,
+      render: (s: number) => (s === 1
+        ? <Tag bordered={false} color="success">启用</Tag>
+        : <Tag bordered={false}>停用</Tag>),
+    },
+    {
+      title: '',
+      key: 'action',
+      width: 132,
+      align: 'right',
+      render: (_, r) => (
+        <Space size={0}>
+          <Tooltip title="详情与价格记录"><Button type="text" size="small" icon={<HistoryOutlined />} onClick={() => openDetail(r)} /></Tooltip>
+          <Tooltip title="编辑"><Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(r)} /></Tooltip>
+          <Popconfirm title="删除该商品？" description="库存不为 0 时无法删除" okText="删除" cancelText="取消" onConfirm={() => remove(r.id)}>
+            <Tooltip title="删除"><Button type="text" size="small" danger icon={<DeleteOutlined />} /></Tooltip>
+          </Popconfirm>
         </Space>
       ),
     },
-  ];
-
-  const priceHistoryColumns = [
-    { title: "日期", dataIndex: "date", key: "date", width: 120, render: (t: string) => t ? new Date(t).toLocaleDateString("zh-CN") : "-" },
-    { title: "类型", dataIndex: "type", key: "type", width: 80, render: (t: string) => {
-      const colorMap: Record<string, string> = { "入库": "green", "出库": "blue", "批次": "orange" };
-      return <Tag color={colorMap[t] || "default"}>{t}</Tag>;
-    }},
-    { title: "单号/批号", dataIndex: "orderNo", key: "orderNo", width: 140 },
-    { title: "单价", dataIndex: "price", key: "price", width: 100, render: (v: number) => <span style={{ fontWeight: 600, color: "#1890ff" }}>¥{Number(v || 0).toFixed(2)}</span> },
-    { title: "数量", dataIndex: "qty", key: "qty", width: 80 },
-  ];
-
-  // 计算货位分配预览
-
+  ], [loadMeta, loadProducts, message, detail]);
 
   return (
-    <div style={{ padding: isMobile ? 0 : 0 }}>
-      <div style={{ 
-        display: "flex", 
-        flexDirection: isMobile ? "column" : "row",
-        justifyContent: "space-between", 
-        marginBottom: isMobile ? 12 : 16,
-        gap: isMobile ? 8 : 0
-      }}>
-      <h4 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: "#0F172A", whiteSpace: "nowrap" }}>商品管理</h4>
-        <Space direction={isMobile ? "vertical" : "horizontal"} style={{ width: isMobile ? "100%" : "auto" }}>
-
-          <Button onClick={() => setCategoryModalOpen(true)} block={isMobile}>分类管理</Button>
-          <Button onClick={() => setUnitModalOpen(true)} block={isMobile}>单位管理</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditId(null); setSelectedLocationId(""); form.resetFields(); setAvailableLocations([]); setFileList([]); setImageUrl(""); setCreateModalOpen(true); }} block={isMobile}>新建商品</Button>
+    <div>
+      <div className="yc-page-head">
+        <div>
+          <h2 className="yc-page-title">商品管理</h2>
+          <p className="yc-page-desc">商品主档、条码、计量单位与初始库存建档</p>
+        </div>
+        <Space wrap>
+          <Button icon={<AppstoreOutlined />} onClick={() => setCategoryModal(true)}>分类</Button>
+          <Button icon={<AppstoreOutlined />} onClick={() => setUnitModal(true)}>单位</Button>
+          <Button icon={<FileExcelOutlined />} onClick={() => (window.location.href = '/products/io')}>导入导出</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建商品</Button>
         </Space>
       </div>
 
-      <Row gutter={isMobile ? 0 : 16}>
-        <Col xs={24} sm={24}>
-          <Card>
-            <div style={{ marginBottom: 16, display: "flex", flexDirection: isMobile ? "column" : "row", gap: isMobile ? 8 : 16 }}>
-              <Input prefix={<SearchOutlined />} placeholder="搜索商品名称/SKU/条码" value={keyword} onChange={(e) => setKeyword(e.target.value)} style={{ width: isMobile ? "100%" : 240 }} allowClear />
-              <Button type="primary" icon={<SearchOutlined />} onClick={loadProducts} block={isMobile}>查询</Button>
-            </div>
+      <Card styles={{ body: { padding: 0 } }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', padding: '14px 16px' }}>
+          <Input
+            allowClear
+            prefix={<SearchOutlined style={{ color: '#94A3B8' }} />}
+            placeholder="搜索商品名称 / 编码 / 条码"
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            onPressEnter={() => { setPage(1); loadProducts(); }}
+            style={{ width: 260 }}
+          />
+          <Select
+            allowClear
+            placeholder="全部分类"
+            value={categoryFilter}
+            onChange={(v) => { setCategoryFilter(v); setPage(1); }}
+            style={{ width: 150 }}
+            options={categories.map((c) => ({ value: String(c.id), label: c.name }))}
+          />
+          <Select
+            allowClear
+            placeholder="全部状态"
+            value={statusFilter}
+            onChange={(v) => { setStatusFilter(v); setPage(1); }}
+            style={{ width: 120 }}
+            options={[{ value: '1', label: '启用' }, { value: '0', label: '停用' }]}
+          />
+          <Button type="primary" ghost icon={<SearchOutlined />} onClick={() => { setPage(1); loadProducts(); }}>查询</Button>
+          <Button icon={<ReloadOutlined />} onClick={() => { setKeyword(''); setCategoryFilter(undefined); setStatusFilter(undefined); setPage(1); }}>重置</Button>
+          <div style={{ flex: 1 }} />
+          <Text type="secondary" style={{ fontSize: 12 }}>共 {total} 个商品</Text>
+        </div>
 
-            <Table
-              columns={columns}
-              dataSource={products}
-              rowKey="id"
-              loading={loading}
-              scroll={{ x: isMobile ? 500 : 1000 }}
-              pagination={{ current: page, total, pageSize: 15, onChange: setPage, showTotal: (t) => `共 ${t} 条`, size: isMobile ? "small" : "default" }}
-              size={isMobile ? "small" : "small"}
-            />
-          </Card>
-        </Col>
-      </Row>
+        <Table<ProductRow>
+          rowKey="id"
+          columns={columns}
+          dataSource={rows}
+          loading={loading}
+          size="middle"
+          scroll={{ x: 820 }}
+          locale={{
+            emptyText: (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={<span>还没有商品，先建一个吧</span>}
+              >
+                <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建商品</Button>
+              </Empty>
+            ),
+          }}
+          pagination={{
+            current: page,
+            pageSize,
+            total,
+            showSizeChanger: true,
+            pageSizeOptions: [15, 30, 50],
+            showTotal: (t) => `共 ${t} 条`,
+            onChange: (p, s) => { setPage(p); setPageSize(s); },
+          }}
+        />
+      </Card>
 
-      {/* 新建/编辑商品 */}
-      <Modal 
-        title={editId ? "编辑商品" : "新建商品"} 
-        open={createModalOpen} 
-        onCancel={() => { setCreateModalOpen(false); setEditId(null); setSelectedLocationId(""); setAvailableLocations([]); setImageUrl(""); setFileList([]); }} 
-        width={isMobile ? "95%" : 720}
-        onOk={handleSubmit}
+      {/* 新建 / 编辑 */}
+      <Drawer
+        title={editId ? '编辑商品' : '新建商品'}
+        open={formOpen}
+        onClose={closeForm}
+        width={640}
+        destroyOnClose
+        maskClosable={false}
+        extra={
+          <Space>
+            <Button onClick={closeForm}>取消</Button>
+            <Button type="primary" loading={submitting} onClick={submit}>保存</Button>
+          </Space>
+        }
       >
-        <Form form={form} layout="vertical">
-          {/* 基本信息 */}
-          <Divider orientation="left" style={{ margin: "16px 0 12px" }}>基本信息</Divider>
-          <Row gutter={isMobile ? 8 : 16}>
-            <Col span={isMobile ? 24 : 8}>
-              <Form.Item name="code" label="商品编码" rules={[{ required: true }]}>
-                <Input placeholder="如: SKU-001" />
+        <Form form={form} layout="vertical" initialValues={{ status: 1, costMethod: 'WEIGHTED' }} preserve={false}>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="code" label="商品编码" rules={[{ required: true, message: '请填写商品编码' }]}>
+                <Input placeholder="如 SKU-001" />
               </Form.Item>
             </Col>
-            <Col span={isMobile ? 24 : 8}>
-              <Form.Item name="name" label="商品名称" rules={[{ required: true }]}>
+            <Col span={12}>
+              <Form.Item name="name" label="商品名称" rules={[{ required: true, message: '请填写商品名称' }]}>
                 <Input placeholder="请输入商品名称" />
               </Form.Item>
             </Col>
-            <Col span={isMobile ? 24 : 8}>
-              <Form.Item name="unitId" label="单位" rules={[{ required: true }]}>
-                <Select value={selectedLocationId || undefined} onChange={(val) => setSelectedLocationId(val)} placeholder="选择单位">{units.map(u => <Option key={u.code} value={u.id}>{u.name}</Option>)}</Select>
+            <Col span={12}>
+              <Form.Item name="unitId" label="计量单位" rules={[{ required: true, message: '请选择单位' }]}>
+                <Select placeholder="选择单位" showSearch optionFilterProp="label"
+                  options={units.map((u) => ({ value: String(u.id), label: u.name }))} />
               </Form.Item>
             </Col>
-            <Col span={isMobile ? 24 : 8}>
+            <Col span={12}>
+              <Form.Item name="categoryId" label="商品分类">
+                <Select allowClear placeholder="选择分类"
+                  options={categories.map((c) => ({ value: String(c.id), label: c.name }))} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
               <Form.Item name="barcode" label="条码">
-                <Input placeholder="商品条码" />
+                <Input placeholder="扫码枪可直接扫入" />
               </Form.Item>
             </Col>
-            <Col span={isMobile ? 24 : 8}>
-              <Form.Item name="categoryId" label="分类">
-                <Select allowClear placeholder="选择分类">{categories.map(c => <Option key={c.id} value={c.id}>{c.name}</Option>)}</Select>
-              </Form.Item>
-            </Col>
-            <Col span={isMobile ? 24 : 8}>
+            <Col span={12}>
               <Form.Item name="costMethod" label="成本方法">
-                <Select placeholder="选择成本方法">
-                  <Option value="WEIGHTED">移动加权</Option>
-                  <Option value="FIFO">先进先出</Option>
-                  <Option value="MONTHLY">月度加权</Option>
-                </Select>
+                <Select
+                  options={[
+                    { value: 'WEIGHTED', label: '移动加权' },
+                    { value: 'FIFO', label: '先进先出' },
+                    { value: 'MONTHLY', label: '月度加权' },
+                  ]}
+                />
               </Form.Item>
             </Col>
           </Row>
 
-          {/* 库存设置 */}
-          <Divider orientation="left" style={{ margin: "16px 0 12px" }}>库存设置</Divider>
-          <Row gutter={isMobile ? 8 : 16}>
-            <Col span={isMobile ? 24 : 8}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 12px' }}>
+            <div style={{ width: 3, height: 14, borderRadius: 2, background: 'var(--primary)' }} />
+            <Text strong style={{ fontSize: 13 }}>库存参数</Text>
+          </div>
+          <Row gutter={16}>
+            <Col span={8}>
               <Form.Item name="safetyStock" label="安全库存">
-                <InputNumber style={{ width: "100%" }} min={0} placeholder="最低库存预警值" />
+                <InputNumber style={{ width: '100%' }} min={0} placeholder="低于此值预警" />
               </Form.Item>
             </Col>
-            <Col span={isMobile ? 24 : 8}>
-              <Form.Item name="maxStock" label="最大库存">
-                <InputNumber style={{ width: "100%" }} min={0} placeholder="最大库存上限" />
+            <Col span={8}>
+              <Form.Item name="maxStock" label="库存上限">
+                <InputNumber style={{ width: '100%' }} min={0} placeholder="高于此值预警" />
               </Form.Item>
             </Col>
-            <Col span={isMobile ? 24 : 8}>
-              <Form.Item name="status" label="状态" initialValue={1}>
-                <Select>
-                  <Option value={1}>启用</Option>
-                  <Option value={0}>停用</Option>
-                </Select>
+            <Col span={8}>
+              <Form.Item name="status" label="状态">
+                <Select options={[{ value: 1, label: '启用' }, { value: 0, label: '停用' }]} />
               </Form.Item>
             </Col>
           </Row>
 
-          {/* 仓库库位设置 - 仅新建时显示 */}
           {!editId && (
             <>
-              <Divider orientation="left" style={{ margin: "16px 0 12px" }}>
-                <Space><HomeOutlined /> 仓库库位设置</Space>
-              </Divider>
-              
-              
-
-              <Row gutter={isMobile ? 8 : 16}>
-                <Col span={isMobile ? 24 : 6}>
-                  <div style={{ marginBottom: 24 }}>
-                    <div style={{ marginBottom: 8, fontWeight: 500 }}>所属仓库 <span style={{ color: "#ff4d4f" }}>*</span></div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 12px' }}>
+                <div style={{ width: 3, height: 14, borderRadius: 2, background: 'var(--primary)' }} />
+                <Text strong style={{ fontSize: 13 }}>初始入库</Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>货位编码形如 A-01-01-01（区-排-列-位）</Text>
+              </div>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item label="所属仓库" required>
                     <Select
-                      style={{ width: "100%" }}
                       placeholder="选择仓库"
-                      popupMatchSelectWidth={false}
-                      value={selectedWarehouseId || undefined}
-                      onChange={(val) => {
-                        setSelectedWarehouseId(val);
-                        setLocationCodeInput("");
-                      }}
-                    >
-                      {warehouses.map((w: any) => <Option key={w.id} value={String(w.id)}>{w.name}</Option>)}
-                    </Select>
-                  </div>
-                </Col>
-                <Col span={isMobile ? 24 : 6}>
-                  <div style={{ marginBottom: 24 }}>
-                    <div style={{ marginBottom: 8, fontWeight: 500 }}>存放货位 <span style={{ color: "#ff4d4f" }}>*</span></div>
-                    <Input
-                      style={{ width: "100%" }}
-                      placeholder="输入货位编码 如 A-1-1-1"
-                      value={locationCodeInput}
-                      onChange={(e) => setLocationCodeInput(e.target.value.toUpperCase())}
+                      value={warehouseId}
+                      onChange={(v) => { setWarehouseId(v); setLocationCode(undefined); loadLocations(v); }}
+                      options={warehouses.map((w) => ({ value: String(w.id), label: w.name }))}
                     />
-                  </div>
+                  </Form.Item>
                 </Col>
-                <Col span={isMobile ? 24 : 6}>
-                  <div style={{ marginBottom: 24 }}>
-                    <div style={{ marginBottom: 8, fontWeight: 500 }}>初始库存数量 <span style={{ color: "#ff4d4f" }}>*</span></div>
-                    <InputNumber style={{ width: "100%" }} min={1} placeholder="入库数量" value={initialStockVal || undefined} onChange={(v) => setInitialStockVal(v || 0)} />
-                  </div>
+                <Col span={12}>
+                  <Form.Item label="存放货位" required>
+                    <Select
+                      showSearch
+                      placeholder={warehouseId ? '选择空货位' : '请先选择仓库'}
+                      disabled={!warehouseId}
+                      loading={locationsLoading}
+                      value={locationCode}
+                      onChange={setLocationCode}
+                      optionFilterProp="label"
+                      options={locations.map((l) => ({
+                        value: l.code,
+                        label: `${l.code} · ${l.name || ''}`,
+                      }))}
+                      notFoundContent={locationsLoading ? '加载中…' : '该仓库暂无空货位'}
+                    />
+                  </Form.Item>
                 </Col>
-                <Col span={isMobile ? 24 : 6}>
-                  <div style={{ marginBottom: 24 }}>
-                    <div style={{ marginBottom: 8, fontWeight: 500 }}>初始成本单价</div>
-                    <InputNumber style={{ width: "100%" }} min={0} precision={2} placeholder="¥ 单价" prefix="¥" value={initialCostVal || undefined} onChange={(v) => setInitialCostVal(v || 0)} />
-                  </div>
+                <Col span={12}>
+                  <Form.Item name="initialStock" label="初始数量" rules={[{ required: !editId, message: '请填写初始数量' }]}>
+                    <InputNumber style={{ width: '100%' }} min={0} placeholder="入库数量" />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="initialCost" label="初始成本单价">
+                    <InputNumber style={{ width: '100%' }} min={0} precision={2} prefix="¥" placeholder="0.00" />
+                  </Form.Item>
                 </Col>
               </Row>
-
-
-
-              
             </>
           )}
 
-          {/* 商品主图 */}
-          <Divider orientation="left" style={{ margin: "16px 0 12px" }}>商品主图（可选）</Divider>
-          <Row gutter={isMobile ? 8 : 16}>
-            <Col span={isMobile ? 24 : 8}>
-              <Form.Item label="上传图片">
-                <Upload
-                  name="file"
-                  action="/api/upload"
-                  maxCount={1}
-                  listType="picture-card"
-                  accept="image/*"
-                  fileList={fileList}
-                  beforeUpload={(file) => {
-                    const isImage = file.type.startsWith('image/');
-                    if (!isImage) { message.error('只能上传图片'); }
-                    const isLt5M = file.size / 1024 / 1024 < 5;
-                    if (!isLt5M) { message.error('图片不能超过5MB'); }
-                    return isImage && isLt5M;
-                  }}
-                  onChange={({ fileList: newFileList }) => {
-                    setFileList(newFileList);
-                    const lastFile = newFileList[newFileList.length - 1];
-                    if (lastFile?.status === 'done') {
-                      const url = lastFile.response?.url;
-                      if (url) {
-                        setImageUrl(url);
-                        message.success('图片上传成功');
-                      }
-                    } else if (lastFile?.status === 'error') {
-                      message.error('图片上传失败');
-                    }
-                  }}
-                  onRemove={() => { setImageUrl(''); setFileList([]); }}
-                >
-                  {fileList.length >= 1 ? null : (
-                    <div>
-                      <PlusOutlined />
-                      <div style={{ marginTop: 8 }}>{imageUrl ? '更换' : '上传'}</div>
-                    </div>
-                  )}
-                </Upload>
-              </Form.Item>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 12px' }}>
+            <div style={{ width: 3, height: 14, borderRadius: 2, background: 'var(--primary)' }} />
+            <Text strong style={{ fontSize: 13 }}>扩展信息</Text>
+          </div>
+          <Row gutter={16}>
+            <Col span={8}>
+              <Form.Item name="spec" label="规格"><Input placeholder="如 500ml/瓶" /></Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="brand" label="品牌"><Input placeholder="品牌" /></Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="model" label="型号"><Input placeholder="型号" /></Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="defaultCost" label="默认成本"><InputNumber style={{ width: '100%' }} min={0} precision={2} prefix="¥" /></Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="salePrice" label="销售价"><InputNumber style={{ width: '100%' }} min={0} precision={2} prefix="¥" /></Form.Item>
             </Col>
           </Row>
 
-          <Divider orientation="left" style={{ margin: "16px 0 12px" }}>商品配置（可选）</Divider>
-          <Row gutter={isMobile ? 8 : 16}>
-            <Col span={isMobile ? 24 : 8}>
-              <Form.Item name="spec" label="规格">
-                <Input placeholder="如: 500ml/瓶" />
-              </Form.Item>
-            </Col>
-            <Col span={isMobile ? 24 : 8}>
-              <Form.Item name="brand" label="品牌">
-                <Input placeholder="品牌名称" />
-              </Form.Item>
-            </Col>
-            <Col span={isMobile ? 24 : 8}>
-              <Form.Item name="model" label="型号">
-                <Input placeholder="产品型号" />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Row gutter={isMobile ? 8 : 16}>
-            <Col span={isMobile ? 24 : 8}>
-              <Form.Item name="weight" label="重量">
-                <InputNumber style={{ width: "100%" }} min={0} precision={3} placeholder="千克" addonAfter="kg" />
-              </Form.Item>
-            </Col>
-            <Col span={isMobile ? 24 : 8}>
-              <Form.Item name="volume" label="体积">
-                <InputNumber style={{ width: "100%" }} min={0} precision={4} placeholder="立方米" addonAfter="m³" />
-              </Form.Item>
-            </Col>
-            <Col span={isMobile ? 24 : 8}>
-              <Form.Item name="defaultCost" label="默认成本">
-                <InputNumber style={{ width: "100%" }} min={0} precision={2} placeholder="¥" prefix="¥" />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Row gutter={isMobile ? 8 : 16}>
-            <Col span={isMobile ? 24 : 8}>
-              <Form.Item name="salePrice" label="销售价">
-                <InputNumber style={{ width: "100%" }} min={0} precision={2} placeholder="¥" prefix="¥" />
-              </Form.Item>
-            </Col>
-            <Col span={isMobile ? 24 : 8}>
-              <Form.Item name="shelfLifeDays" label="保质期">
-                <InputNumber style={{ width: "100%" }} min={0} placeholder="天数" addonAfter="天" />
-              </Form.Item>
-            </Col>
-            <Col span={isMobile ? 24 : 8}>
-              <Form.Item name="leadTimeDays" label="采购周期">
-                <InputNumber style={{ width: "100%" }} min={0} placeholder="天数" addonAfter="天" />
-              </Form.Item>
-            </Col>
-          </Row>
+          <Form.Item label="商品主图">
+            <Upload
+              name="file"
+              action="/api/upload"
+              listType="picture-card"
+              maxCount={1}
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              fileList={fileList}
+              onChange={({ fileList: list }) => {
+                setFileList(list);
+                const last = list[list.length - 1];
+                if (last?.status === 'done') {
+                  const url = (last.response as any)?.url;
+                  if (url) { setImageUrl(url); message.success('图片已上传'); }
+                  else message.error((last.response as any)?.error || '上传失败');
+                } else if (last?.status === 'error') {
+                  message.error((last.response as any)?.error || '上传失败');
+                }
+              }}
+              onRemove={() => { setImageUrl(''); setFileList([]); }}
+            >
+              {fileList.length >= 1 ? null : (
+                <div><PlusOutlined /><div style={{ marginTop: 6, fontSize: 12 }}>上传</div></div>
+              )}
+            </Upload>
+          </Form.Item>
 
-          <Divider orientation="left" style={{ margin: "16px 0 12px" }}>其他信息</Divider>
-          <Form.Item name="remark" label="描述">
+          <Form.Item name="remark" label="备注">
             <Input.TextArea rows={2} placeholder="商品描述、规格说明等" />
           </Form.Item>
         </Form>
-      </Modal>
+      </Drawer>
 
-      {/* 分类管理弹窗 */}
-      <Modal title="分类管理" open={categoryModalOpen} onCancel={() => setCategoryModalOpen(false)} footer={null} width={isMobile ? "95%" : 600}>
-        <Form form={catForm} layout="inline" style={{ marginBottom: 16 }}>
-          <Form.Item name="name" rules={[{ required: true }]}>
-            <Input placeholder="分类名称" />
-          </Form.Item>
-          <Form.Item name="code" rules={[{ required: true }]}>
-            <Input placeholder="分类编码" />
-          </Form.Item>
-          <Form.Item name="parentId">
-            <Select allowClear placeholder="上级分类" style={{ width: 120 }}>
-              {categories.map(c => <Option key={c.id} value={c.id}>{c.name}</Option>)}
-            </Select>
-          </Form.Item>
-          <Form.Item>
-            <Button type="primary" onClick={handleCreateCategory}>添加</Button>
-          </Form.Item>
-        </Form>
-        <List
-          bordered
-          dataSource={categories}
-          renderItem={(item: any) => (
-            <List.Item
-              actions={[
-                <Popconfirm key="del" title="确定删除此分类？" onConfirm={() => handleDeleteCategory(item.id)} okText="确定" cancelText="取消">
-                  <Button type="link" danger size="small" icon={<DeleteOutlined />}>删除</Button>
-                </Popconfirm>
+      {/* 详情 */}
+      <Drawer title="商品详情" open={detailOpen} onClose={() => setDetailOpen(false)} width={520}>
+        {detail && (
+          <>
+            <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginBottom: 18 }}>
+              <Avatar shape="square" size={52} src={detail.imageUrl || undefined} style={{ background: '#EFF6FF', color: '#2563EB' }}>
+                {(detail.name || '?').slice(0, 1)}
+              </Avatar>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 650 }}>{detail.name}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', fontFamily: 'ui-monospace, monospace' }}>{detail.code}</div>
+              </div>
+            </div>
+            <List
+              size="small"
+              split={false}
+              dataSource={[
+                ['分类', detail.category?.name || '—'],
+                ['单位', detail.unit?.name || '—'],
+                ['条码', detail.barcode || '—'],
+                ['当前库存', String(detail.totalStock ?? 0)],
+                ['状态', detail.status === 1 ? '启用' : '停用'],
               ]}
-            >
-              <List.Item.Meta
-                title={item.name}
-                description={`编码: ${item.code}`}
-              />
-            </List.Item>
-          )}
-        />
-      </Modal>
-
-      {/* 单位管理弹窗 */}
-      <Modal title="单位管理" open={unitModalOpen} onCancel={() => setUnitModalOpen(false)} footer={null} width={isMobile ? "95%" : 500}>
-        <div style={{ marginBottom: 16 }}>
-
-        </div>
-        <Form form={unitForm} layout="inline" style={{ marginBottom: 16 }}>
-          <Form.Item name="name" rules={[{ required: true }]}>
-            <Input placeholder="单位名称" />
-          </Form.Item>
-          <Form.Item name="code" rules={[{ required: true }]}>
-            <Input placeholder="单位编码" />
-          </Form.Item>
-          <Form.Item>
-            <Button type="primary" onClick={handleCreateUnit}>添加</Button>
-          </Form.Item>
-        </Form>
-        <List
-          bordered
-          dataSource={units}
-          renderItem={(item: any) => (
-            <List.Item
-              actions={[
-                <Popconfirm key="del" title="确定删除此单位？" onConfirm={() => handleDeleteUnit(item.id)} okText="确定" cancelText="取消">
-                  <Button type="link" danger size="small" icon={<DeleteOutlined />}>删除</Button>
-                </Popconfirm>
+              renderItem={(item) => (
+                <List.Item style={{ padding: '6px 0' }}>
+                  <Text type="secondary" style={{ width: 84 }}>{item[0]}</Text>
+                  <Text>{item[1]}</Text>
+                </List.Item>
+              )}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '16px 0 10px' }}>
+              <HistoryOutlined style={{ color: 'var(--primary)' }} />
+              <Text strong style={{ fontSize: 13 }}>价格记录</Text>
+            </div>
+            <Table
+              size="small"
+              rowKey={(r: any) => r.id}
+              loading={priceLoading}
+              dataSource={priceHistory}
+              pagination={false}
+              locale={{ emptyText: '还没有价格记录' }}
+              columns={[
+                { title: '类型', dataIndex: 'type', width: 70 },
+                { title: '单号 / 批次', dataIndex: 'orderNo', ellipsis: true },
+                { title: '数量', dataIndex: 'qty', width: 70, align: 'right' },
+                { title: '单价', dataIndex: 'price', width: 90, align: 'right', render: (v: number) => `¥${Number(v || 0).toFixed(2)}` },
               ]}
-            >
-              <List.Item.Meta
-                title={item.name}
-                description={`编码: ${item.code}`}
-              />
-            </List.Item>
-          )}
-        />
-      </Modal>
-
-      {/* 商品详情 - 含价格历史 */}
-      <Drawer title="商品详情" open={detailOpen} onClose={() => { setDetailOpen(false); setPriceHistory(null); }} width={isMobile ? "100%" : 720}>
-        {selectedProduct && (
-          <Tabs defaultActiveKey="info" items={[
-            {
-              key: "info",
-              label: "基本信息",
-              children: (
-                <>
-                  <Descriptions column={isMobile ? 1 : 2} bordered size="small">
-                    <Descriptions.Item label="编码">{selectedProduct.code}</Descriptions.Item>
-                    <Descriptions.Item label="名称">{selectedProduct.name}</Descriptions.Item>
-                    <Descriptions.Item label="条码">{selectedProduct.barcode || "-"}</Descriptions.Item>
-                    <Descriptions.Item label="分类">{selectedProduct.category?.name || "-"}</Descriptions.Item>
-                    <Descriptions.Item label="单位">{selectedProduct.unit?.name || selectedProduct.unit || "-"}</Descriptions.Item>
-                    <Descriptions.Item label="状态"><Tag color={selectedProduct.status === 1 ? "green" : "red"}>{selectedProduct.status === 1 ? "启用" : "停用"}</Tag></Descriptions.Item>
-                    <Descriptions.Item label="安全库存">{selectedProduct.safetyStock || 0}</Descriptions.Item>
-                    <Descriptions.Item label="最大库存">{selectedProduct.maxStock || 0}</Descriptions.Item>
-                    <Descriptions.Item label="描述" span={isMobile ? 1 : 2}>{selectedProduct.remark || selectedProduct.description || "-"}</Descriptions.Item>
-                  </Descriptions>
-
-                  {/* 显示库存分布 */}
-                  {selectedProduct.inventories && selectedProduct.inventories.length > 0 && (
-                    <>
-                      <Title level={5} style={{ marginTop: 16 }}><HomeOutlined /> 库存分布</Title>
-                      <Table
-                        size="small"
-                        pagination={false}
-                        dataSource={selectedProduct.inventories}
-                        rowKey="id"
-                        columns={[
-                          { title: "仓库", dataIndex: ["warehouse", "name"], key: "warehouse", render: (_: any, r: any) => r.warehouse?.name || "-" },
-                          { title: "在手量", dataIndex: "onHand", key: "onHand", render: (v: any) => <Text strong>{Number(v || 0)}</Text> },
-                          { title: "锁定量", dataIndex: "locked", key: "locked", render: (v: any) => Number(v || 0) },
-                          { title: "可用量", dataIndex: "available", key: "available", render: (v: any) => <Text type="success">{Number(v || 0)}</Text> },
-                        ]}
-                      />
-                    </>
-                  )}
-                </>
-              ),
-            },
-            {
-              key: "price",
-              label: <><DollarOutlined /> 价格历史</>,
-              children: (
-                <div>
-                  {priceHistory && (
-                    <>
-                      <Descriptions column={2} bordered size="small" style={{ marginBottom: 16 }}>
-                        <Descriptions.Item label="当前成本">
-                          <Text strong style={{ color: "#1890ff" }}>¥{Number(priceHistory.currentCost || 0).toFixed(2)}</Text>
-                        </Descriptions.Item>
-                        <Descriptions.Item label="最新入库价">
-                          <Text strong style={{ color: "#52c41a" }}>¥{Number(priceHistory.lastInboundPrice || 0).toFixed(2)}</Text>
-                        </Descriptions.Item>
-                      </Descriptions>
-                      <Table
-                        columns={priceHistoryColumns}
-                        dataSource={priceHistory.records || []}
-                        rowKey="id"
-                        size="small"
-                        pagination={{ pageSize: 10 }}
-                        loading={priceLoading}
-                      />
-                    </>
-                  )}
-                </div>
-              ),
-            },
-          ]} />
+            />
+          </>
         )}
       </Drawer>
+
+      {/* 分类管理 */}
+      <Modal title="商品分类" open={categoryModal} onCancel={() => setCategoryModal(false)} footer={null} width={560}>
+        <Form form={catForm} layout="inline" style={{ marginBottom: 12, rowGap: 8 }}>
+          <Form.Item name="name" rules={[{ required: true, message: '名称' }]}><Input placeholder="分类名称" /></Form.Item>
+          <Form.Item name="code" rules={[{ required: true, message: '编码' }]}><Input placeholder="编码" /></Form.Item>
+          <Form.Item><Button type="primary" onClick={createCategory}>添加</Button></Form.Item>
+        </Form>
+        <List
+          size="small"
+          dataSource={categories}
+          locale={{ emptyText: '暂无分类' }}
+          renderItem={(c: any) => (
+            <List.Item
+              actions={[
+                <Popconfirm key="d" title="删除该分类？" okText="删除" cancelText="取消"
+                  onConfirm={async () => {
+                    const data = await fetch(`/api/products/categories?id=${c.id}`, { method: 'DELETE' }).then(readJson);
+                    if (data.success) { message.success('已删除'); loadMeta(); } else message.error(data.error || '删除失败');
+                  }}>
+                  <Button type="link" size="small" danger>删除</Button>
+                </Popconfirm>,
+              ]}
+            >
+              <Space><Tag bordered={false}>{c.code}</Tag>{c.name}</Space>
+            </List.Item>
+          )}
+        />
+      </Modal>
+
+      {/* 单位管理 */}
+      <Modal title="计量单位" open={unitModal} onCancel={() => setUnitModal(false)} footer={null} width={520}>
+        <Form form={unitForm} layout="inline" style={{ marginBottom: 12, rowGap: 8 }}>
+          <Form.Item name="name" rules={[{ required: true, message: '名称' }]}><Input placeholder="单位名称，如 个" /></Form.Item>
+          <Form.Item name="code" rules={[{ required: true, message: '编码' }]}><Input placeholder="编码，如 PCS" /></Form.Item>
+          <Form.Item><Button type="primary" onClick={createUnit}>添加</Button></Form.Item>
+        </Form>
+        <List
+          size="small"
+          dataSource={units}
+          locale={{ emptyText: '暂无单位' }}
+          renderItem={(u: any) => (
+            <List.Item
+              actions={[
+                <Popconfirm key="d" title="删除该单位？" okText="删除" cancelText="取消"
+                  onConfirm={async () => {
+                    const data = await fetch(`/api/products/units?id=${u.id}`, { method: 'DELETE' }).then(readJson);
+                    if (data.success) { message.success('已删除'); loadMeta(); } else message.error(data.error || '删除失败');
+                  }}>
+                  <Button type="link" size="small" danger>删除</Button>
+                </Popconfirm>,
+              ]}
+            >
+              <Space><Tag bordered={false}>{u.code}</Tag>{u.name}</Space>
+            </List.Item>
+          )}
+        />
+      </Modal>
     </div>
   );
 }

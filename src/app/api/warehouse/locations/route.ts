@@ -49,7 +49,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const data = locations.map((l) => {
+    let data = locations.map((l) => {
       const o = occ.get(l.id.toString());
       return {
         ...l,
@@ -59,7 +59,18 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    return NextResponse.json(serializeBigInt({ success: true, data }));
+    // v1.1.1：支持按「空货位」过滤与关键词搜索，前端下拉不再一次拉 2600 条
+    const onlyEmpty = searchParams.get("empty") === "1";
+    const keyword = (searchParams.get("keyword") || "").trim().toUpperCase();
+    if (onlyEmpty) data = data.filter((l) => l.isEmpty);
+    if (keyword) data = data.filter((l) => String(l.code).toUpperCase().includes(keyword));
+
+    const limitRaw = parseInt(searchParams.get("limit") || "0", 10);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 2000) : 0;
+    const total = data.length;
+    if (limit) data = data.slice(0, limit);
+
+    return NextResponse.json(serializeBigInt({ success: true, data, total }));
   } catch (error: any) {
     return NextResponse.json(
       serializeBigInt({ success: false, error: error.message }),
