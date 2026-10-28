@@ -1,6 +1,6 @@
 # ☁️ 云仓 · 智能仓储管理平台
 
-![Version](https://img.shields.io/badge/version-v1.0.1-blue) ![Next.js](https://img.shields.io/badge/Next.js-14.2-black) ![Prisma](https://img.shields.io/badge/Prisma-5-2D3748) ![License](https://img.shields.io/badge/license-MIT-green) ![Security](https://img.shields.io/badge/security-audited%20v1.0.1-orange)
+![Version](https://img.shields.io/badge/version-v1.2.0-blue) ![Next.js](https://img.shields.io/badge/Next.js-14.2-black) ![Prisma](https://img.shields.io/badge/Prisma-5-2D3748) ![License](https://img.shields.io/badge/license-MIT-green) ![Security](https://img.shields.io/badge/security-audited%20v1.0.1-orange)
 
 > 面向中小型制造、零售与贸易企业的全链路库存管理系统。浏览器打开即用，从「货什么时候进来的」到「放在哪个货架哪个格子」，全程可追溯。
 
