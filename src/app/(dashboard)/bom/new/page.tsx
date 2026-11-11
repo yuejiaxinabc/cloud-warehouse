@@ -1,4 +1,5 @@
 'use client';
+import { fetchAllPages } from '@/lib/fetch-all-pages';
 
 import React, { useState, useEffect } from 'react';
 import { Card, Form, Input, Select, Button, Table, Space, InputNumber, message, Typography, Row, Col } from 'antd';
@@ -21,9 +22,8 @@ export default function BomNewPage() {
 
   const fetchProducts = async () => {
     try {
-      const res = await fetch('/api/products?pageSize=1000');
-      const data = await res.json();
-      if (data.success) setProducts(data.data?.items || []);
+      const items = await fetchAllPages('/api/products');
+      setProducts(items);
     } catch (e) { console.error(e); }
   };
 

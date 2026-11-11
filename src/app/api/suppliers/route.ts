@@ -3,12 +3,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
-import { requireAuth } from '@/lib/auth-guard';
+import { requireAuth, requirePermission } from '@/lib/auth-guard';
+import { handleApiError } from '@/lib/errors';
 import { writeLog, getClientIp } from '@/lib/log';
 
 export async function GET(req: NextRequest) {
-    await requireAuth(req);
   try {
+    // 读面：任意已登录/持 Token 的客户端可查供应商档案（保持 v1.2.0 行为）
+    await requireAuth(req);
     const { searchParams } = new URL(req.url);
     const id = searchParams.get('id');
     const keyword = searchParams.get('keyword') || '';
@@ -42,13 +44,14 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ success: true, data: serializeBigInt({ items, total, page, pageSize }) });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }
 
 export async function POST(req: NextRequest) {
-    await requireAuth(req);
   try {
+    // P0-1：供应商建档是写操作（含银行账号），只读角色必须 403
+    await requirePermission('supplier:write');
     const body = await req.json();
     const { name, code, contact, phone, email, address, bankAccount, bankName, taxNo, remark } = body;
 
@@ -76,13 +79,14 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, data: serializeBigInt(supplier) });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }
 
 export async function PUT(req: NextRequest) {
-    await requireAuth(req);
   try {
+    // P0-1：编辑供应商同样要求写权限
+    await requirePermission('supplier:write');
     const body = await req.json();
     const { id, ...data } = body;
 
@@ -104,13 +108,14 @@ export async function PUT(req: NextRequest) {
 
     return NextResponse.json({ success: true, data: serializeBigInt(supplier) });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }
 
 export async function DELETE(req: NextRequest) {
-    await requireAuth(req);
   try {
+    // P0-1：删除（软删）供应商只给仓库主管及以上
+    await requirePermission('supplier:delete');
     const { searchParams } = new URL(req.url);
     const id = searchParams.get('id');
     if (!id) return NextResponse.json({ success: false, error: '缺少ID' }, { status: 400 });
@@ -132,6 +137,6 @@ export async function DELETE(req: NextRequest) {
     });
     return NextResponse.json({ success: true });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }

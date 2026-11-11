@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Card, Table, Button, Space, Input, Tag, Modal, Form, message, Typography, Row, Col, Statistic, Popconfirm } from "antd";
+import { Card, Table, Button, Space, Input, Tag, Modal, Form, message, Typography, Row, Col, Statistic, Popconfirm, Select, Tooltip } from "antd";
+import { useOrgOptions } from "@/lib/use-org-options";
 import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined, ShopOutlined, EnvironmentOutlined, PhoneOutlined, UserOutlined } from "@ant-design/icons";
 
 const { Title, Text } = Typography;
@@ -14,7 +15,8 @@ export default function WarehousePage() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
   const [form] = Form.useForm();
-
+  // v1.2.3：仓库归属组织，数据权限按此收敛
+  const orgOptions = useOrgOptions();
   
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
@@ -104,18 +106,23 @@ export default function WarehousePage() {
             form.setFieldsValue(record);
             setCreateModalOpen(true);
           }}>编辑</Button>
-          <Popconfirm
-            title="确认删除此仓库？"
-            description={record.productCount > 0 ? "该仓库有库存，无法删除" : "删除后不可恢复"}
-            onConfirm={() => handleDelete(record.id)}
-            okText="确认"
-            cancelText="取消"
-            disabled={record.productCount > 0}
-          >
-            <Button type="link" size="small" danger icon={<DeleteOutlined />} disabled={record.productCount > 0}>
-              删除
-            </Button>
-          </Popconfirm>
+          {/* 删除禁用时给原因：禁用按钮本身不触发 hover，包一层 span 让 Tooltip 能显示 */}
+          <Tooltip title={record.productCount > 0 ? `该仓库还有 ${record.productCount} 个商品的库存，无法删除；请先将库存调出或清空` : ''}>
+            <span>
+              <Popconfirm
+                title="确认删除此仓库？"
+                description={record.productCount > 0 ? "该仓库有库存，无法删除" : "删除后不可恢复"}
+                onConfirm={() => handleDelete(record.id)}
+                okText="确认"
+                cancelText="取消"
+                disabled={record.productCount > 0}
+              >
+                <Button type="link" size="small" danger icon={<DeleteOutlined />} disabled={record.productCount > 0}>
+                  删除
+                </Button>
+              </Popconfirm>
+            </span>
+          </Tooltip>
         </Space>
       ),
     },
@@ -194,6 +201,9 @@ export default function WarehousePage() {
               </Form.Item>
             </Col>
           </Row>
+          <Form.Item name="orgId" label="归属组织" extra="数据权限「本部门 / 本部门及以下」按仓库归属组织判定">
+            <Select allowClear placeholder="未划分" options={orgOptions} />
+          </Form.Item>
           <Form.Item name="remark" label="备注">
             <Input.TextArea rows={3} placeholder="备注信息" />
           </Form.Item>

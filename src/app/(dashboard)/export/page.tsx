@@ -76,7 +76,22 @@ export default function ExportPage() {
   return (
     <div className="page-container">
       <h4 style={{ margin: "0 0 8px", fontSize: 18, fontWeight: 600, color: "#0F172A", whiteSpace: "nowrap" }}>数据导出</h4>
-      <Text type="secondary" style={{ display: 'block', marginBottom: 24 }}>导出 CSV 文件，可用 Excel 直接打开，支持中文</Text>
+      <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>导出 CSV 文件，可用 Excel 直接打开，支持中文</Text>
+      {/* 导入/导出入口已合并：商品的导入导出统一在「商品导入导出」页，本页保留各模块 CSV 导出；
+          菜单里「导入 / 导出」与「Excel 导出」两个入口指向同一类功能，见 Sidebar 待 A 侧合并为一项 */}
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="商品导入导出请走统一入口"
+        description={
+          <span>
+            商品的 Excel 导入、导出模板下载与导出已统一在
+            <a href="/products/io" style={{ margin: '0 4px' }}>商品导入导出</a>
+            ，本页仅保留各业务模块的 CSV 导出。
+          </span>
+        }
+      />
       
       <Row gutter={[16, 16]}>
         {modules.map(mod => (

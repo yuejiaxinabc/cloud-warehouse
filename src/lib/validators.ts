@@ -95,17 +95,55 @@ export const createBomSchema = z.object({
   })).min(1, '请至少添加一个原材料'),
 });
 
+// 金额 / 数量通用校验（v1.2.4 B）：>= 0 且有上限，极端值直接 422 + 中文提示。
+// 注意：Zod 失败由 handleApiError 统一转 422；路由层直接抛 AppError 的
+// 路径（商品新建/单据过账）则返回 400。两者文案一致，只是状态码按层区分。
+export const MAX_MONEY = 1_000_000;
+export const MAX_QTY = 1_000_000;
+export const moneyField = (label: string) =>
+  z.number({ invalid_type_error: `${label}必须是数字` })
+    .finite(`${label}格式不正确`)
+    .min(0, `${label}不能为负数`)
+    .max(MAX_MONEY, `${label}不能超过 ${MAX_MONEY}`);
+export const qtyField = (label: string) =>
+  z.number({ invalid_type_error: `${label}必须是数字` })
+    .finite(`${label}格式不正确`)
+    .min(0, `${label}不能为负数`)
+    .max(MAX_QTY, `${label}不能超过 ${MAX_QTY}`);
+
 // 商品更新验证
+// v1.2.4 B：此前 schema 只有 price/costPrice/minStock/maxStock 等「旧字段名」,
+// ProductService.update 真正读的 salePrice/defaultCost/safetyStock 等字段
+// 全被 zod 默认 strip 掉，导致 [id] PUT 改价/改库存上下限根本落不了库。
+// 现在按 service 的实际白名单补齐字段，并统一加 >=0 / 上限校验。
 export const updateProductSchema = z.object({
-  name: z.string().min(1).max(100).optional(),
+  name: z.string().min(1, '商品名称不能为空').max(200, '商品名称不能超过 200 个字符').optional(),
+  code: z.string().min(1).max(50).optional(),
   sku: z.string().min(1).max(50).optional(),
-  barcode: z.string().max(50).optional(),
-  categoryId: z.number().optional(),
+  barcode: z.string().max(50).optional().nullable(),
+  categoryId: z.number().optional().nullable(),
+  unitId: z.number().optional().nullable(),
   unit: z.string().max(20).optional(),
-  price: z.number().min(0).optional(),
-  costPrice: z.number().min(0).optional(),
-  minStock: z.number().min(0).optional(),
-  maxStock: z.number().min(0).optional(),
+  spec: z.string().max(500).optional().nullable(),
+  brand: z.string().max(100).optional().nullable(),
+  model: z.string().max(100).optional().nullable(),
+  remark: z.string().max(500).optional().nullable(),
+  imageUrl: z.string().max(500).optional().nullable(),
+  // 旧字段名（兼容）：与 salePrice/defaultCost 同义
+  price: moneyField('售价').optional(),
+  costPrice: moneyField('成本价').optional(),
+  salePrice: moneyField('销售价').optional().nullable(),
+  defaultCost: moneyField('默认成本').optional().nullable(),
+  minStock: qtyField('安全库存').optional(),
+  maxStock: qtyField('库存上限').optional(),
+  safetyStock: qtyField('安全库存').optional().nullable(),
+  shelfLifeDays: z.number().int('保质期天数必须是整数').min(0, '保质期天数不能为负数').max(3650, '保质期天数不能超过 3650').optional().nullable(),
+  leadTimeDays: z.number().int('采购周期必须是整数').min(0, '采购周期不能为负数').max(3650, '采购周期不能超过 3650').optional().nullable(),
+  weight: moneyField('重量').optional().nullable(),
+  volume: moneyField('体积').optional().nullable(),
+  costMethod: z.enum(['WEIGHTED', 'FIFO', 'MONTHLY']).optional(),
+  enableSerial: z.boolean().optional(),
+  enableBatch: z.boolean().optional(),
   description: z.string().max(500).optional(),
-  status: z.number().optional(),
+  status: z.number().int().min(0).max(1).optional(),
 });

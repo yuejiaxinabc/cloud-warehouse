@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
 import { requireAuth } from '@/lib/auth-guard';
+import { safeErrorMessage } from '@/lib/errors';
 
 /**
  * GET /api/replenishment
@@ -83,6 +84,6 @@ export async function GET(req: NextRequest) {
     rows.sort((a, b) => b.suggestQty - a.suggestQty);
     return NextResponse.json(serializeBigInt({ success: true, data: rows }));
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message || '补货建议计算失败' }, { status: 500 });
+    return NextResponse.json({ success: false, error: safeErrorMessage(error) || '补货建议计算失败' }, { status: 500 });
   }
 }

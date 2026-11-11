@@ -3,9 +3,100 @@ import CredentialsProvider from 'next-auth/providers/credentials';
 import bcrypt from 'bcryptjs';
 import { prisma } from './prisma';
 import { consumeCaptcha } from './captcha-store';
-import { hit, reset as resetRate, clientIp } from './rate-limit';
+import { hit, reset as resetRate, clientIp, lockKey, isLocked } from './rate-limit';
 import { secretUsable } from './env-guard';
 import { writeLog } from './log';
+// H3 修复：登录时分配会话 id，登出时拉黑，鉴权入口校验
+import { newSessionId, revokeSession } from './session-revocation';
+import { validateSessionPrincipal, permissionsForRoles } from './account-state';
+
+/**
+ * 登录日志（v1.2.3）
+ *
+ * 与 writeLog（operation_logs，系统操作日志）并存，互不替换：
+ * writeLog 记的是「业务操作流水」，login_logs 记的是「身份认证事件」，
+ * 供「日志中心 - 登录日志」按账号/动作/结果/时间段筛选。
+ *
+ * 红线：只落账号、动作、结果、原因、IP、客户端，绝不落密码、验证码、动态码原文。
+ * 登录日志是旁路审计，写入失败只告警，绝不允许把登录主流程带崩。
+ */
+type LoginLogAction = 'login' | 'logout' | 'failed' | 'locked' | '2fa_failed';
+
+/** 会话里的 id 可能是 string/number/BigInt，统一成 BigInt，非法值写 null */
+function toLoginLogUserId(v: number | bigint | string | null | undefined): bigint | null {
+  if (v === null || v === undefined || v === '') return null;
+  try {
+    return BigInt(v as any);
+  } catch {
+    return null;
+  }
+}
+
+/** 从 authorize() 的 req.headers 里取 User-Agent（v4 传普通对象，也兼容 Headers 实例） */
+function readUserAgent(headers: unknown): string {
+  if (!headers) return '';
+  const h = headers as any;
+  if (typeof h.get === 'function') {
+    const v = h.get('user-agent');
+    return v ? String(v) : '';
+  }
+  for (const key of Object.keys(h)) {
+    if (key.toLowerCase() === 'user-agent') {
+      const v = h[key];
+      if (Array.isArray(v)) return String(v[0] ?? '');
+      return String(v ?? '');
+    }
+  }
+  return '';
+}
+
+/** 取当前请求的 IP / UA（signOut 事件里拿不到 req，只能从 next/headers 兜底） */
+async function currentRequestMeta(): Promise<{ ip: string | null; userAgent: string | null }> {
+  try {
+    const { headers } = await import('next/headers');
+    const h = headers();
+    const realIp = h.get('x-real-ip') || h.get('x-forwarded-for')?.split(',')[0]?.trim() || '';
+    const ua = h.get('user-agent') || '';
+    return {
+      ip: realIp ? String(realIp).slice(0, 64) : null,
+      userAgent: ua ? String(ua).slice(0, 500) : null,
+    };
+  } catch {
+    return { ip: null, userAgent: null };
+  }
+}
+
+/**
+ * 写一条登录日志。
+ * 列宽：username 50 / reason 200 / ip 64 / userAgent 500，超长一律截断，避免写入直接抛错。
+ */
+async function writeLoginLog(entry: {
+  userId?: number | bigint | string | null;
+  username: string;
+  action: LoginLogAction;
+  success: boolean;
+  reason?: string | null;
+  ip?: string | null;
+  userAgent?: string | null;
+}): Promise<void> {
+  try {
+    const username = String(entry.username || '').trim().slice(0, 50) || '未知账号';
+    await prisma.loginLog.create({
+      data: {
+        userId: toLoginLogUserId(entry.userId),
+        username,
+        action: entry.action,
+        success: entry.success,
+        reason: entry.reason ? String(entry.reason).slice(0, 200) : null,
+        ip: entry.ip ? String(entry.ip).slice(0, 64) : null,
+        userAgent: entry.userAgent ? String(entry.userAgent).slice(0, 500) : null,
+      },
+    });
+  } catch (e) {
+    // 登录日志属于旁路审计：写失败只告警，不影响登录/登出结果
+    console.warn('[auth] 登录日志写入失败（不影响登录流程）:', e);
+  }
+}
 
 /**
  * 登录防护策略（FIX-2026-1012）
@@ -49,10 +140,21 @@ export const authOptions: NextAuthOptions = {
         const password = String(credentials?.password || '');
         const captchaToken = String(credentials?.captchaToken || '');
         const captchaAnswer = String(credentials?.captchaAnswer || '');
+        // v1.2.3：登录日志要带客户端标识，UA 截断 500 字（列宽上限）
+        const userAgent = readUserAgent(req?.headers).slice(0, 500);
 
         // ---- 1. 验证码（服务端强制，不在前端做） ----
         const cap = consumeCaptcha(captchaToken, captchaAnswer);
         if (!cap.ok) {
+          // 登录日志：验证码错误（不记录验证码原文，只记结论）
+          await writeLoginLog({
+            username,
+            action: 'failed',
+            success: false,
+            reason: '验证码错误',
+            ip: clientIp((req?.headers as Record<string, string>) ?? {}),
+            userAgent,
+          });
           throw new Error(cap.error || '验证码错误');
         }
 
@@ -73,10 +175,32 @@ export const authOptions: NextAuthOptions = {
         if (!ipHit.allowed) {
           throw new Error('尝试过于频繁，请稍后再试');
         }
+        // L7：账号维度硬锁（30 分钟）。锁键按用户名计，换 IP 也绕不过；
+        // 文案与「密码错误」区分开是有意的 —— 锁定是账号状态，不泄露账号是否存在。
+        const userLockKey = 'login:lock:' + username.toLowerCase();
+        if (await isLocked(userLockKey)) {
+          throw new Error('账号已被临时锁定，请 30 分钟后再试或联系管理员');
+        }
+
         const userHit = await hit(userKey, MAX_USER_ATTEMPTS, USER_WINDOW_MS);
         if (!userHit.allowed) {
-          // 账号维度用退避提示，不暴露「这个账号存在与否」
-          throw new Error('尝试过于频繁，请稍后再试');
+          await lockKey(userLockKey, 30 * 60 * 1000);
+          // 登录日志：账号锁定（此刻还没查用户，userId 留空，账号用输入值）
+          await writeLoginLog({
+            username,
+            action: 'locked',
+            success: false,
+            reason: '连续失败锁定30分钟',
+            ip,
+            userAgent,
+          });
+          await writeLog({
+            module: 'auth',
+            action: 'account_locked',
+            content: '账号 ' + username + ' 连续登录失败达到阈值，已临时锁定 30 分钟（IP ' + ip + '）',
+            ip,
+          });
+          throw new Error('账号已被临时锁定，请 30 分钟后再试或联系管理员');
         }
 
         // v1.2.0：递增延迟——失败次数越多，登录响应人为变慢（上限 2s），
@@ -118,6 +242,16 @@ export const authOptions: NextAuthOptions = {
         const passwordOk = await bcrypt.compare(password, hashToCheck);
 
         if (!user || !passwordOk) {
+          // 登录日志：账号或密码错误（对外文案与这里保持一致，不区分账号是否存在）
+          await writeLoginLog({
+            userId: user?.id ?? null,
+            username,
+            action: 'failed',
+            success: false,
+            reason: '账号或密码错误',
+            ip,
+            userAgent,
+          });
           // 审计：失败登录也留痕（v1.1.1），只记账号与 IP，不记密码
           await writeLog({
             module: 'auth',
@@ -132,6 +266,16 @@ export const authOptions: NextAuthOptions = {
         if ((user as any).twoFactorEnabled) {
           const { verifyTotp } = await import('./totp');
           if (!verifyTotp(String((user as any).totpSecret || ''), totpCode)) {
+            // 登录日志：两步验证失败（绝不记录动态码原文）
+            await writeLoginLog({
+              userId: user.id,
+              username,
+              action: '2fa_failed',
+              success: false,
+              reason: '动态码不正确',
+              ip,
+              userAgent,
+            });
             await writeLog({
               module: 'auth',
               action: 'login_failed',
@@ -163,6 +307,17 @@ export const authOptions: NextAuthOptions = {
           data: { lastLoginAt: new Date() },
         });
 
+        // 登录日志：成功登录（action=login / success=true，带 IP 与客户端 UA）
+        await writeLoginLog({
+          userId: user.id,
+          username: user.username,
+          action: 'login',
+          success: true,
+          reason: null,
+          ip,
+          userAgent,
+        });
+
         // 审计：登录成功（v1.1.1 —— 之前这里完全没有写日志，导致「系统日志」永远空白）
         await writeLog({
           module: 'auth',
@@ -174,14 +329,7 @@ export const authOptions: NextAuthOptions = {
           ip,
         });
 
-        const permissions = new Set<string>();
-        const roles: string[] = [];
-        for (const ur of user.userRoles) {
-          roles.push(ur.role.code);
-          for (const rp of ur.role.rolePermissions) {
-            permissions.add(rp.permission.code);
-          }
-        }
+        const { roles, permissions } = permissionsForRoles(user.userRoles);
 
         return {
           id: user.id.toString(),
@@ -190,20 +338,22 @@ export const authOptions: NextAuthOptions = {
           username: user.username,
           orgId: user.orgId?.toString(),
           roles,
-          permissions: Array.from(permissions),
+          permissions,
+          sessionVersion: user.sessionVersion,
         };
       },
     }),
   ],
   session: {
     strategy: 'jwt',
-    maxAge: 24 * 60 * 60,
+    // H3：WMS 属管理后台，24h 会话太长（被盗 Cookie 可用一整天），收紧到 8h
+    maxAge: 8 * 60 * 60,
     // FIX-2026-1012：显式声明 cookie 安全属性。
     // 原实现依赖 NextAuth 默认值，NEXTAUTH_URL 是 http 时 secure 会退化为 false，
     // 而站点同时开放 80 端口 → 会话 cookie 会走明文。
     updateAge: 60 * 60,
   },
-  jwt: { maxAge: 24 * 60 * 60 },
+  jwt: { maxAge: 8 * 60 * 60 },
   cookies: (() => {
     // FIX-2026-1012：secure 标志必须跟着「实际访问协议」走，不能只看 NODE_ENV。
     // 服务器当前同时开放 80(http) 与 443(https)，若无条件 secure=true，
@@ -221,22 +371,44 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
-        token.username = (user as any).username;
-        token.orgId = (user as any).orgId;
-        token.roles = (user as any).roles;
-        token.permissions = (user as any).permissions;
+        token.sub = user.id;
+        token.sessionVersion = (user as any).sessionVersion;
+        token.sid = newSessionId();
       }
-      return token;
+      const current = await validateSessionPrincipal(token);
+      if (!current) return { ...token, invalid: true, roles: [], permissions: [] };
+      return { ...token, ...current, invalid: false };
     },
     async session({ session, token }) {
-      if (session.user) {
-        (session.user as any).id = token.sub;
-        (session.user as any).username = token.username;
-        (session.user as any).orgId = token.orgId;
-        (session.user as any).roles = token.roles;
-        (session.user as any).permissions = token.permissions;
-      }
+      // NextAuth also invokes this callback for direct getServerSession consumers.
+      if (token.invalid) return null as any;
+      const current = await validateSessionPrincipal(token);
+      if (!current) return null as any;
+      session.user = { ...current, sid: token.sid } as any;
       return session;
+    },
+  },
+  events: {
+    /**
+     * H3：登出即吊销。
+     * NextAuth v4 的 signOut 事件带 token，按其 sid 拉黑；TTL 取会话剩余时长上限。
+     */
+    async signOut({ token }) {
+      const sid = (token as any)?.sid;
+      if (sid) await revokeSession(String(sid), 8 * 3600 * 1000);
+
+      // v1.2.3：登出同样进登录日志。token 里有 username / sub / sid，
+      // 账号取 username，回退用 sub；sid 只用于上面的吊销，不落库。
+      const meta = await currentRequestMeta();
+      await writeLoginLog({
+        userId: (token as any)?.sub ?? null,
+        username: String((token as any)?.username || (token as any)?.sub || '未知账号'),
+        action: 'logout',
+        success: true,
+        reason: null,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+      });
     },
   },
   pages: { signIn: '/login', error: '/login' },
@@ -262,11 +434,17 @@ export function hasRole(roles: string[], required: string): boolean {
 
 // 获取当前登录用户（用于API路由）
 export async function getSessionUser() {
-  const { getServerSession } = await import('next-auth');
-  const session = await getServerSession(authOptions);
+  const { getSessionChecked } = await import('./auth-guard');
+  const session = await getSessionChecked();
   if (!session?.user) return null;
+
+  // H3：路过这里的调用方同样是鉴权入口，登出后必须立刻失效
+  const { isSessionRevoked } = await import('./session-revocation');
+  const sid = (session.user as any)?.sid;
+  if (sid && (await isSessionRevoked(String(sid)))) return null;
   return {
     id: Number((session.user as any).id),
+    sessionVersion: (session.user as any).sessionVersion,
     username: (session.user as any).username,
     orgId: (session.user as any).orgId ? Number((session.user as any).orgId) : null,
     roles: (session.user as any).roles || [],

@@ -3,11 +3,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
-import { requireAuth } from '@/lib/auth-guard';
+import { requireAuth, requirePermission } from '@/lib/auth-guard';
+import { handleApiError } from '@/lib/errors';
 
 export async function GET(req: NextRequest) {
-    await requireAuth(req);
   try {
+    // 读面：任意已登录/持 Token 的客户端可查客户档案（保持 v1.2.0 行为）
+    await requireAuth(req);
     const { searchParams } = new URL(req.url);
     const id = searchParams.get('id');
     const keyword = searchParams.get('keyword') || '';
@@ -41,13 +43,14 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ success: true, data: serializeBigInt({ items, total, page, pageSize }) });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }
 
 export async function POST(req: NextRequest) {
-    await requireAuth(req);
   try {
+    // P0-1：客户建档是写操作，只读角色（auditor）必须 403
+    await requirePermission('customer:write');
     const body = await req.json();
     const { name, code, contact, phone, email, address, remark } = body;
 
@@ -66,13 +69,14 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, data: serializeBigInt(customer) });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }
 
 export async function PUT(req: NextRequest) {
-    await requireAuth(req);
   try {
+    // P0-1：编辑客户同样要求写权限
+    await requirePermission('customer:write');
     const body = await req.json();
     const { id, ...data } = body;
 
@@ -85,13 +89,14 @@ export async function PUT(req: NextRequest) {
 
     return NextResponse.json({ success: true, data: serializeBigInt(customer) });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }
 
 export async function DELETE(req: NextRequest) {
-    await requireAuth(req);
   try {
+    // P0-1：删除（软删）权限只给仓库主管及以上，销售员只能建/改
+    await requirePermission('customer:delete');
     const { searchParams } = new URL(req.url);
     const id = searchParams.get('id');
     if (!id) return NextResponse.json({ success: false, error: '缺少ID' }, { status: 400 });
@@ -105,6 +110,6 @@ export async function DELETE(req: NextRequest) {
     await prisma.customer.update({ where: { id: Number(id) }, data: { deletedAt: new Date() } });
     return NextResponse.json({ success: true });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }

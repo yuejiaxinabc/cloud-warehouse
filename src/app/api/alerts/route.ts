@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authOptions } from '@/lib/auth';
 import { prisma } from "@/lib/prisma";
 import { serializeBigInt } from "@/lib/serialize";
+import { handleApiError } from '@/lib/errors';
 
 const DEFAULT_LOW_STOCK_THRESHOLD = 10; // 未设安全库存时的默认低库存阈值
 const HIGH_VALUE_THRESHOLD = 500000;    // 高库存价值阈值（50万）
@@ -165,6 +166,6 @@ export async function GET(req: NextRequest) {
       }) 
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }

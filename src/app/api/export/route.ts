@@ -1,16 +1,20 @@
-import { getServerSession } from 'next-auth';
+import { getDataScope, withWarehouseScope, withDocumentScope } from '@/lib/data-scope';
+import { requireAuth, requirePermission } from '@/lib/auth-guard';
 import { NextRequest } from 'next/server';
-import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { successResponse, errorResponse, handleApiError } from '@/lib/errors';
-import { requireAuth } from '@/lib/auth-guard';
 
 /**
  * GET /api/export - 导出数据
  */
 export async function GET(request: NextRequest) {
-    await requireAuth(request);
   try {
+    const auth = await requireAuth(request);
+    await requirePermission('report:export', auth);
+    const scope = await getDataScope(auth.user);
+    const inventoryWhere = withWarehouseScope({}, scope);
+    const documentWhere = withDocumentScope({}, scope, auth.user);
+    const warehouseWhere = scope.warehouseIds === null ? {} : { id: { in: scope.warehouseIds } };
     const { searchParams } = new URL(request.url);
     const type = searchParams.get('type');
 
@@ -18,6 +22,9 @@ export async function GET(request: NextRequest) {
       return errorResponse('请选择导出类型', 400);
     }
 
+    const viewPermissions: Record<string, string> = { PRODUCT: 'product:view', INVENTORY: 'inventory:view', INBOUND: 'stock_in:view', OUTBOUND: 'stock_out:view', TRANSFER: 'transfer:view', STOCKTAKE: 'stocktake:view', LOCATION: 'inventory:view', WAREHOUSE: 'inventory:view', TRANSACTION: 'inventory:view' };
+    if (!viewPermissions[type]) return errorResponse('不支持的导出类型', 400);
+    await requirePermission(viewPermissions[type], auth);
     let headers: string[] = [];
     let rows: any[][] = [];
     let fileName = '';
@@ -55,7 +62,7 @@ export async function GET(request: NextRequest) {
 
       case 'INVENTORY': {
         const inventories = await prisma.inventory.findMany({
-          where: { onHand: { gt: 0 } },
+          where: withWarehouseScope({ onHand: { gt: 0 } }, scope),
           include: {
             product: { select: { code: true, name: true, spec: true, brand: true } },
             warehouse: { select: { name: true, code: true } },
@@ -98,6 +105,7 @@ export async function GET(request: NextRequest) {
 
       case 'INBOUND': {
         const orders = await prisma.inboundOrder.findMany({
+          where: documentWhere,
           include: {
             supplier: { select: { name: true } },
             warehouse: { select: { name: true } },
@@ -122,6 +130,7 @@ export async function GET(request: NextRequest) {
 
       case 'OUTBOUND': {
         const orders = await prisma.outboundOrder.findMany({
+          where: documentWhere,
           include: {
             customer: { select: { name: true } },
             warehouse: { select: { name: true } },
@@ -151,6 +160,7 @@ export async function GET(request: NextRequest) {
         // 也没有 totalQty 字段，原写法直接触发 Prisma 校验错误（请求参数格式错误）。
         // 改为按 fromWhId/toWhId 单独查仓库名，数量由明细求和。
         const orders = await prisma.transferOrder.findMany({
+          where: withDocumentScope({}, scope, auth.user, { transfer: true }),
           include: { transferItems: { select: { quantity: true } } },
           orderBy: { createdAt: 'desc' },
         });
@@ -186,6 +196,7 @@ export async function GET(request: NextRequest) {
         // FIX-2026-1015：schema 里没有 StocktakeOrder 模型，实际叫 CountOrder。
         // prisma.stocktakeOrder 是 undefined，调用即抛 TypeError（服务器内部错误）。
         const orders = await prisma.countOrder.findMany({
+          where: documentWhere,
           include: {
             warehouse: { select: { name: true } },
             countItems: { select: { systemQty: true, countQty: true, diffQty: true } },
@@ -211,6 +222,7 @@ export async function GET(request: NextRequest) {
 
       case 'LOCATION': {
         const locations = await prisma.location.findMany({
+          where: { zone: inventoryWhere },
           include: {
             zone: { select: { name: true, code: true } },
           },
@@ -233,6 +245,7 @@ export async function GET(request: NextRequest) {
 
       case 'WAREHOUSE': {
         const warehouses = await prisma.warehouse.findMany({
+          where: warehouseWhere,
           orderBy: { code: 'asc' },
         });
 
@@ -254,6 +267,7 @@ export async function GET(request: NextRequest) {
         // 没有 product/warehouse 关系，include 会触发 Prisma 校验错误。
         // 改为先取流水，再批量查名称映射。
         const txns = await prisma.inventoryTransaction.findMany({
+          where: inventoryWhere,
           orderBy: { txnTime: 'desc' },
           take: 10000,
         });

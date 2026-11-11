@@ -1,3 +1,6 @@
+import { getDataScope, withWarehouseScope, withDocumentScope, assertWarehouseAllowed, assertDocumentAllowed } from '@/lib/data-scope';
+import { hasPermissionGranted } from '@/lib/auth-guard';
+import { ForbiddenError } from '@/lib/errors';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
@@ -15,7 +18,11 @@ import { StocktakeService } from '@/services/stocktake.service';
  */
 export async function GET(req: NextRequest) {
   try {
-    await requireMpToken(req);
+    const auth = await requireMpToken(req);
+    for (const permission of ["stocktake:create"]) {
+      if (!hasPermissionGranted(auth.user.permissions, permission)) throw new ForbiddenError('缺少业务操作权限');
+    }
+    const scope = await getDataScope(auth.user);
     const { searchParams } = new URL(req.url);
     const id = searchParams.get('id');
     const page = parseInt(searchParams.get('page') || '1');
@@ -30,11 +37,13 @@ export async function GET(req: NextRequest) {
         },
       });
       if (!order) return NextResponse.json({ success: false, error: '盘点单不存在' }, { status: 404 });
+      await assertDocumentAllowed(scope, auth.user, order);
       return NextResponse.json(serializeBigInt({ success: true, data: order }));
     }
 
     const [items, total] = await Promise.all([
       prisma.countOrder.findMany({
+        where: withDocumentScope({}, scope, auth.user),
         include: {
           warehouse: { select: { name: true, code: true } },
           countItems: { select: { id: true, countQty: true, diffQty: true } },
@@ -43,7 +52,7 @@ export async function GET(req: NextRequest) {
         take: pageSize,
         orderBy: { id: 'desc' },
       }),
-      prisma.countOrder.count({}),
+      prisma.countOrder.count({ where: withDocumentScope({}, scope, auth.user) }),
     ]);
 
     const data = items.map((o: any) => ({
@@ -61,7 +70,11 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    await requireMpToken(req);
+    const auth = await requireMpToken(req);
+    for (const permission of ["stocktake:create"]) {
+      if (!hasPermissionGranted(auth.user.permissions, permission)) throw new ForbiddenError('缺少业务操作权限');
+    }
+    const scope = await getDataScope(auth.user);
     const body = await req.json();
 
     // 开始盘点：DRAFT → COUNTING（与 Web「开始盘点」一致）
@@ -69,7 +82,7 @@ export async function POST(req: NextRequest) {
       if (!body.orderId) {
         return NextResponse.json({ success: false, error: '缺少盘点单ID' }, { status: 400 });
       }
-      const result = await StocktakeService.start(Number(body.orderId));
+      const result = await StocktakeService.start(Number(body.orderId), Number(auth.user.id));
       return NextResponse.json(serializeBigInt({ success: true, data: result, message: '盘点已开始' }));
     }
 
@@ -79,6 +92,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: '仓库为必填' }, { status: 400 });
     }
 
+    await assertWarehouseAllowed(scope, Number(warehouseId));
     const now = new Date();
     const dateStr = now.getFullYear() + String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0');
     const count = await prisma.countOrder.count({ where: { orderNo: { startsWith: 'PD' + dateStr } } });
@@ -90,6 +104,7 @@ export async function POST(req: NextRequest) {
 
     const order = await prisma.countOrder.create({
       data: {
+        operatorId: Number(auth.user.id),
         orderNo,
         type: 'FULL',
         warehouseId: Number(warehouseId),
@@ -119,7 +134,11 @@ export async function POST(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   try {
-    await requireMpToken(req);
+    const auth = await requireMpToken(req);
+    for (const permission of ["stocktake:create"]) {
+      if (!hasPermissionGranted(auth.user.permissions, permission)) throw new ForbiddenError('缺少业务操作权限');
+    }
+    const scope = await getDataScope(auth.user);
     const body = await req.json();
     const { orderId, itemId, countQty, remark } = body;
     if (!orderId || !itemId || countQty === undefined || countQty === null) {
@@ -131,9 +150,10 @@ export async function PATCH(req: NextRequest) {
     }
 
     // 走与 Web 相同的 enterCount：校验状态 + 自动 DRAFT→COUNTING + 计算 diff
-    await StocktakeService.enterCount(Number(orderId), [{ id: Number(itemId), countQty: qty, remark }]);
+    await StocktakeService.enterCount(Number(orderId), [{ id: Number(itemId), countQty: qty, remark }], Number(auth.user.id));
 
     const item = await prisma.countItem.findUnique({ where: { id: Number(itemId) }, select: { countQty: true, diffQty: true } });
+    if (!item) return NextResponse.json({ success: false, error: '盘点明细不存在' }, { status: 404 });
     return NextResponse.json(serializeBigInt({
       success: true,
       data: { id: Number(itemId), countQty: Number(item.countQty), diffQty: Number(item.diffQty) },
@@ -146,6 +166,10 @@ export async function PATCH(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   try {
     const auth = await requireMpToken(req);
+    for (const permission of ["stocktake:create"]) {
+      if (!hasPermissionGranted(auth.user.permissions, permission)) throw new ForbiddenError('缺少业务操作权限');
+    }
+    const scope = await getDataScope(auth.user);
     const body = await req.json();
     const { orderId } = body;
     if (!orderId) {
@@ -157,6 +181,7 @@ export async function PUT(req: NextRequest) {
       include: { countItems: true },
     });
     if (!order) return NextResponse.json({ success: false, error: '盘点单不存在' }, { status: 404 });
+      await assertDocumentAllowed(scope, auth.user, order);
 
     // 与 Web 一致：仅 COUNTING 状态可结算（settle 内部同样校验）
     if (order.status !== 'COUNTING') {
@@ -168,7 +193,7 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ success: false, error: `还有 ${uncounted} 个商品未录入实盘数量` }, { status: 400 });
     }
 
-    const result = await StocktakeService.settle(Number(orderId), auth.userId || undefined);
+    const result = await StocktakeService.settle(Number(orderId), Number(auth.user.id));
     return NextResponse.json(serializeBigInt({ success: true, data: result, message: '盘点结算完成' }));
   } catch (error: any) {
     return mpErrorResponse(error);

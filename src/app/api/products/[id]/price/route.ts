@@ -1,7 +1,9 @@
+import { businessAccess, withWarehouseScope } from '@/app/api/warehouse/access';
 import { getServerSession } from 'next-auth';
 import { NextRequest, NextResponse } from 'next/server';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { handleApiError } from '@/lib/errors';
 
 /**
  * GET /api/products/[id]/price - 获取商品成本价
@@ -11,15 +13,12 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
+    const { scope } = await businessAccess('product:view');
     const productId = parseInt(params.id);
 
     // 1. 先查 inventory_lots 的最新成本价
     const latestLot = await prisma.inventoryLot.findFirst({
-      where: {
-        productId,
-        status: 1,
-        costPrice: { not: null },
-      },
+      where: withWarehouseScope({ productId, status: 1, costPrice: { not: null } }, scope),
       orderBy: { createdAt: 'desc' },
       select: { costPrice: true },
     });
@@ -33,10 +32,7 @@ export async function GET(
 
     // 2. 查最近的入库单成本价
     const latestInboundItem = await prisma.inboundItem.findFirst({
-      where: {
-        productId,
-        costPrice: { not: null },
-      },
+      where: { productId, costPrice: { not: null }, order: withWarehouseScope({}, scope) },
       orderBy: { createdAt: 'desc' },
       select: { costPrice: true },
     });
@@ -50,10 +46,7 @@ export async function GET(
 
     // 3. 查最近的出库单成本价
     const latestOutboundItem = await prisma.outboundItem.findFirst({
-      where: {
-        productId,
-        costPrice: { not: null },
-      },
+      where: { productId, costPrice: { not: null }, order: withWarehouseScope({}, scope) },
       orderBy: { createdAt: 'desc' },
       select: { costPrice: true },
     });
@@ -70,6 +63,6 @@ export async function GET(
       data: { price: 0, source: 'none' },
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }

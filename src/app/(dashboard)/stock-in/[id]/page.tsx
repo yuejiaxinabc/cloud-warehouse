@@ -16,6 +16,14 @@ const statusMap: Record<string, { label: string; color: string }> = {
   CANCELLED: { label: '已取消', color: 'red' },
 };
 
+// 入库类型中文映射：不要把 PURCHASE / purchase 这类枚举直接显示出来
+// （列表页已映射，这里补详情页与打印页；大小写两种都覆盖）
+const typeMap: Record<string, string> = {
+  PURCHASE: '采购入库', RETURN: '退货入库', PRODUCTION: '生产入库', OTHER: '其他入库',
+  purchase: '采购入库', return: '退货入库', production: '生产入库', other: '其他入库',
+};
+const typeLabel = (t: string | undefined | null) => (t ? (typeMap[t] || t) : '-');
+
 export default function StockInDetailPage() {
   const router = useRouter();
   const params = useParams();
@@ -112,7 +120,9 @@ export default function StockInDetailPage() {
   const loadLocations = async (warehouseId?: number) => {
     if (!warehouseId) { setLocations([]); return; }
     try {
-      const res = await fetch(`/api/warehouse/locations?warehouseId=${warehouseId}`, { cache: 'no-store' });
+      // v1.2.1（P2-7）：必须带 limit，后端新默认分页只回 200 条，仓库货位 2600+ 会漏；
+      // limit=2000 只是当前折中，后续应改成按编码服务端搜索。不能加 empty=1，补货要看到已占货位。
+      const res = await fetch(`/api/warehouse/locations?warehouseId=${warehouseId}&limit=2000`, { cache: 'no-store' });
       const j = await res.json();
       if (j.success) setLocations(j.data || []);
     } catch { setLocations([]); }
@@ -209,7 +219,7 @@ export default function StockInDetailPage() {
     const win = window.open('', '_blank');
     if (!win || !order) return;
     const items = order.inboundItems || order.items || [];
-    win.document.write(`<!DOCTYPE html><html><head><title>入库单 - ${order.orderNo}</title><style>body{font-family:'SimSun',serif;padding:20px}h1{text-align:center;font-size:24px}.info{margin:20px 0}.info span{margin-right:30px}table{width:100%;border-collapse:collapse;margin-top:20px}th,td{border:1px solid #000;padding:8px;text-align:left}th{background:#f0f0f0}.footer{margin-top:40px;display:flex;justify-content:space-between}.footer div{width:30%;text-align:center}@media print{body{padding:0}}</style></head><body><h1>入库单</h1><div class="info"><span>单号: ${order.orderNo}</span><span>仓库: ${order.warehouse?.name || '-'}</span><span>类型: ${order.type || '-'}</span><span>状态: ${statusMap[order.status]?.label || order.status}</span></div><table><thead><tr><th>序号</th><th>商品编码</th><th>商品名称</th><th>数量</th><th>单价</th><th>批次号</th></tr></thead><tbody>${items.map((it: any, i: number) => `<tr><td>${i+1}</td><td>${it.product?.code||'-'}</td><td>${it.product?.name||'-'}</td><td>${Number(it.quantity||0)}</td><td>${it.costPrice?'¥'+Number(it.costPrice).toFixed(2):'-'}</td><td>${it.lotNumber||'-'}</td></tr>`).join('')}</tbody></table><div class="footer"><div>制单人: ___</div><div>审核人: ___</div><div>收货人: ___</div></div><script>window.onload=function(){window.print()}</script></body></html>`);
+    win.document.write(`<!DOCTYPE html><html><head><title>入库单 - ${order.orderNo}</title><style>body{font-family:'SimSun',serif;padding:20px}h1{text-align:center;font-size:24px}.info{margin:20px 0}.info span{margin-right:30px}table{width:100%;border-collapse:collapse;margin-top:20px}th,td{border:1px solid #000;padding:8px;text-align:left}th{background:#f0f0f0}.footer{margin-top:40px;display:flex;justify-content:space-between}.footer div{width:30%;text-align:center}@media print{body{padding:0}}</style></head><body><h1>入库单</h1><div class="info"><span>单号: ${order.orderNo}</span><span>仓库: ${order.warehouse?.name || '-'}</span><span>类型: ${typeLabel(order.type)}</span><span>状态: ${statusMap[order.status]?.label || order.status}</span></div><table><thead><tr><th>序号</th><th>商品编码</th><th>商品名称</th><th>数量</th><th>单价</th><th>批次号</th></tr></thead><tbody>${items.map((it: any, i: number) => `<tr><td>${i+1}</td><td>${it.product?.code||'-'}</td><td>${it.product?.name||'-'}</td><td>${Number(it.quantity||0)}</td><td>${it.costPrice?'¥'+Number(it.costPrice).toFixed(2):'-'}</td><td>${it.lotNumber||'-'}</td></tr>`).join('')}</tbody></table><div class="footer"><div>制单人: ___</div><div>审核人: ___</div><div>收货人: ___</div></div><script>window.onload=function(){window.print()}</script></body></html>`);
     win.document.close();
   };
 
@@ -217,6 +227,13 @@ export default function StockInDetailPage() {
   if (!order) return <div style={{ textAlign: 'center', padding: 100 }}>入库单不存在</div>;
 
   const items = order.inboundItems || order.items || [];
+
+  // v1.2.1（P2-7）：「统一货位」会应用到本单所有商品，因此只有当本单商品
+  // 全部就是该货位已放的那个商品时，才允许选它继续补货。判定用 productId，
+  // 不用商品名文本比较（改名或同名商品会误判）。
+  const orderProductIds: string[] = ((locationForm.getFieldValue('items') as any[]) || [])
+    .map((it: any) => String(it?.productId ?? ''))
+    .filter((v: string) => v !== '');
 
   const itemColumns = [
     { title: '序号', width: 60, render: (_: any, __: any, i: number) => i + 1 },
@@ -252,7 +269,7 @@ export default function StockInDetailPage() {
       <Card style={{ marginBottom: 16 }}>
         <Descriptions bordered column={{ xs: 1, sm: 2, md: 3 }}>
           <Descriptions.Item label="单号"><Text copyable code>{order.orderNo}</Text></Descriptions.Item>
-          <Descriptions.Item label="类型">{order.type || '-'}</Descriptions.Item>
+          <Descriptions.Item label="类型">{typeLabel(order.type)}</Descriptions.Item>
           <Descriptions.Item label="状态"><Tag color={statusMap[order.status]?.color}>{statusMap[order.status]?.label || order.status}</Tag></Descriptions.Item>
           <Descriptions.Item label="仓库">{order.warehouse?.name || '-'}</Descriptions.Item>
           <Descriptions.Item label="供应商">{order.supplier?.name || '-'}</Descriptions.Item>
@@ -295,11 +312,18 @@ export default function StockInDetailPage() {
               return label.toLowerCase().includes(input.toLowerCase());
             }}
             onChange={(v) => locationForm.setFieldsValue({ commonBox: v })}>
-            {locations.filter((l: any) => l.status === 1).map((l: any) => (
-              <Select.Option key={l.id} value={l.id} disabled={!!l.occupiedBy}>
-                {l.code}{l.occupiedBy ? `（已放：${l.occupiedBy.productName}）` : '（空）'}
-              </Select.Option>
-            ))}
+            {locations.filter((l: any) => l.status === 1).map((l: any) => {
+              const occ = l.occupiedBy;
+              const sameProduct = !!occ && orderProductIds.length > 0
+                && orderProductIds.every((pid) => pid === String(occ.productId));
+              return (
+                <Select.Option key={l.id} value={l.id} disabled={!!occ && !sameProduct}>
+                  {l.code}{occ
+                    ? (sameProduct ? `（本商品已存放：${occ.productName}，可继续补货）` : `（已放：${occ.productName}，不可混放）`)
+                    : '（空）'}
+                </Select.Option>
+              );
+            })}
           </Select>
           <Button onClick={handleSameBox}>同货位</Button>
         </div>

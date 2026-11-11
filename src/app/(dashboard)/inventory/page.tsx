@@ -79,7 +79,7 @@ export default function InventoryPage() {
     try {
       const res = await fetch(`/api/inventory?id=${id}`, { method: "DELETE" });
       const data = await res.json();
-      if (data.success) { message.success("删除成功"); loadData(); }
+      if (data.success) { message.success("删除成功"); setDetailOpen(false); setDetail(null); loadData(); }
       else message.error(data.error || "删除失败");
     } catch (e) { message.error("删除失败"); }
   };
@@ -129,18 +129,14 @@ export default function InventoryPage() {
     },
     { title: "在库量", dataIndex: "onHand", key: "onHand", width: 100, render: (v: any) => <span style={{ fontWeight: 600 }}>{Number(v || 0).toLocaleString()}</span> },
     { title: "锁定量", dataIndex: "locked", key: "locked", width: 80, render: (v: any) => Number(v || 0) > 0 ? <Tag color="orange">{Number(v)}</Tag> : 0 },
-    { title: "可用量", key: "available", width: 100, render: (_: any, r: any) => { const v = Number(r.onHand || 0) - Number(r.locked || 0); return <Text style={{ color: v > 0 ? "#52c41a" : "#ff4d4f", fontWeight: 600 }}>{v.toLocaleString()}</Text>; } },
+    // P2-2：标题被截成「可用」，加宽并禁止换行
+    { title: "可用量", key: "available", width: 120, onHeaderCell: () => ({ style: { whiteSpace: "nowrap" } }), render: (_: any, r: any) => { const v = Number(r.onHand || 0) - Number(r.locked || 0); return <Text style={{ color: v > 0 ? "#52c41a" : "#ff4d4f", fontWeight: 600 }}>{v.toLocaleString()}</Text>; } },
     { title: "成本价", dataIndex: "avgCost", key: "avgCost", width: 100, render: (v: any) => v ? `¥${Number(v).toFixed(2)}` : "-" },
     { title: "库存价值", key: "value", width: 120, render: (_: any, r: any) => { const v = Number(r.onHand || 0) * Number(r.avgCost || 0); return <Text strong style={{ color: "#52c41a" }}>¥{v.toLocaleString()}</Text>; } },
     {
-      title: "操作", key: "action", width: 140, fixed: "right" as const,
+      title: "操作", key: "action", width: 80, fixed: "right" as const,
       render: (_: any, record: any) => (
-        <Space size={0}>
-          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => handleViewDetail(record)}>详情</Button>
-          <Popconfirm title="确认删除此库存记录？" onConfirm={() => handleDelete(record.id)} okText="确认" cancelText="取消">
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
-          </Popconfirm>
-        </Space>
+        <Button type="link" size="small" icon={<EyeOutlined />} style={{ paddingInline: 4, whiteSpace: "nowrap" }} onClick={() => handleViewDetail(record)}>详情</Button>
       ),
     },
   ];
@@ -199,7 +195,19 @@ export default function InventoryPage() {
         title={detailInv ? `库存详情 - ${detailInv.product?.name || ""} (${detailInv.product?.code || ""})` : "库存详情"}
         open={detailOpen}
         onCancel={() => { setDetailOpen(false); setDetail(null); }}
-        footer={null}
+        footer={detailInv ? [
+          <Popconfirm
+            key="delete"
+            title="确认删除此库存记录？"
+            description="删除后该商品在此仓库的库存记录将被清除，请确认无误。"
+            onConfirm={() => handleDelete(detailInv.id)}
+            okText="确认删除"
+            cancelText="取消"
+          >
+            <Button danger icon={<DeleteOutlined />}>删除此库存记录</Button>
+          </Popconfirm>,
+          <Button key="close" onClick={() => { setDetailOpen(false); setDetail(null); }}>关闭</Button>,
+        ] : null}
         width={860}
       >
         {detailLoading ? (

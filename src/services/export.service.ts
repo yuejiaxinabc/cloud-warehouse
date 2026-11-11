@@ -1,5 +1,42 @@
 import { prisma } from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
+import { calcAvailableNumber } from '@/lib/utils';
+
+/** 导出结果摘要：实际导出条数 + 筛选条件，供前端拼提示文案，禁止硬编码条数 */
+export type ExportSummary = {
+  type: string;
+  exportedCount: number;
+  filters: string;
+  /** 如：已导出全部 15 条（筛选：仓库=主仓；2026-11-01～2026-11-11） */
+  message: string;
+};
+
+/** 把导出参数翻译成中文筛选描述；无筛选时写「全部」 */
+export function describeExportFilters(type: string, params: Record<string, any>): string {
+  const parts: string[] = [];
+  if (params.warehouseId) parts.push(`仓库 ID=${params.warehouseId}`);
+  if (params.warehouseName) parts.push(`仓库=${params.warehouseName}`);
+  if (params.startDate || params.endDate) {
+    parts.push(`${params.startDate || '开始'}～${params.endDate || '至今'}`);
+  }
+  if (params.status) parts.push(`状态=${params.status}`);
+  if (params.keyword) parts.push(`关键词=${params.keyword}`);
+  return parts.length ? parts.join('；') : '全部';
+}
+
+export function buildExportSummary(
+  type: string,
+  exportedCount: number,
+  params: Record<string, any>,
+): ExportSummary {
+  const filters = describeExportFilters(type, params);
+  return {
+    type,
+    exportedCount,
+    filters,
+    message: `已导出全部 ${exportedCount} 条（筛选：${filters}）`,
+  };
+}
 
 /**
  * 导出服务
@@ -7,7 +44,11 @@ import { Prisma } from '@prisma/client';
  */
 export class ExportService {
   /**
-   * 创建导出任务
+   * 创建导出任务（同步执行完成后返回任务 + 实际导出摘要）
+   * v1.2.4 B：返回体带 exportedCount / exportMessage，前端直接用它拼提示，
+   * 不要再按 pageSize 之类硬编码条数。export_tasks 表没有条数字段，
+   * 条数同时写进 fileName（`…_15条_…`）以便在任务列表里也能看到；
+   * 如需按任务持久化查询条数，需另加迁移加列（见回报）。
    */
   static async createTask(data: {
     type: string;
@@ -25,13 +66,22 @@ export class ExportService {
 
     // 异步处理导出（实际项目中应使用 BullMQ 队列）
     // 这里直接同步执行
+    let summary: ExportSummary | null = null;
     try {
-      await this.processTask(Number(task.id));
+      summary = await this.processTask(Number(task.id));
     } catch (error) {
       console.error('导出任务处理失败:', error);
     }
 
-    return task;
+    const fresh = await prisma.exportTask.findUnique({ where: { id: task.id } });
+    return {
+      ...(fresh ?? task),
+      id: Number((fresh ?? task).id),
+      userId: (fresh ?? task).userId ? Number((fresh ?? task).userId) : null,
+      exportedCount: summary?.exportedCount ?? null,
+      exportSummary: summary,
+      exportMessage: summary?.message ?? null,
+    };
   }
 
   /**
@@ -68,6 +118,12 @@ export class ExportService {
         id: Number(t.id),
         userId: t.userId ? Number(t.userId) : null,
         params: t.params as any,
+        // v1.2.4 B：条数取自完成时写进 fileName 的 `_<n>条_`（export_tasks 表
+        // 暂无条数字段）；解析不到时为 null，前端不得用它反推、不得硬编码。
+        exportedCount: (() => {
+          const m = /_(\d+)条_/.exec(t.fileName || '');
+          return m ? Number(m[1]) : null;
+        })(),
       })),
       total,
       page,
@@ -77,11 +133,13 @@ export class ExportService {
   }
 
   /**
-   * 处理导出任务
+   * 处理导出任务，返回实际导出摘要（含真实条数与筛选条件）。
+   * v1.2.4 B：此前只写 fileUrl/fileName，调用方拿不到条数，
+   * 前端只能按 pageSize 猜（所谓「含糊的 5 条」就源于此）。
    */
-  private static async processTask(taskId: number) {
+  private static async processTask(taskId: number): Promise<ExportSummary | null> {
     const task = await prisma.exportTask.findUnique({ where: { id: taskId } });
-    if (!task) return;
+    if (!task) return null;
 
     await prisma.exportTask.update({
       where: { id: taskId },
@@ -131,15 +189,18 @@ export class ExportService {
       ].join('\n');
 
       const fileUrl = `/exports/${task.type}_${Date.now()}.csv`;
+      // 实际导出条数 = 数据行数（不含表头），写进文件名与摘要
+      const summary = buildExportSummary(task.type, data.length, params);
 
       await prisma.exportTask.update({
         where: { id: taskId },
         data: {
           status: 'COMPLETED',
           fileUrl,
-          fileName: `${fileName}_${new Date().toISOString().slice(0, 10)}.csv`,
+          fileName: `${fileName}_${data.length}条_${new Date().toISOString().slice(0, 10)}.csv`,
         },
       });
+      return summary;
     } catch (error) {
       await prisma.exportTask.update({
         where: { id: taskId },
@@ -148,13 +209,24 @@ export class ExportService {
           errorMsg: error instanceof Error ? error.message : '未知错误',
         },
       });
+      return null;
     }
   }
 
-  /** 导出商品数据 */
+  /** 导出商品数据（按 params 的筛选条件过滤；无筛选即全部启用商品） */
   private static async exportProducts(params: any) {
+    const where: Prisma.ProductWhereInput = { status: 1 };
+    if (params.categoryId) where.categoryId = Number(params.categoryId);
+    if (params.keyword) {
+      const kw = String(params.keyword);
+      where.OR = [
+        { name: { contains: kw } },
+        { code: { contains: kw } },
+        { barcode: { contains: kw } },
+      ];
+    }
     const products = await prisma.product.findMany({
-      where: { status: 1 },
+      where,
       include: {
         category: { select: { name: true } },
         unit: { select: { name: true } },
@@ -201,7 +273,8 @@ export class ExportService {
         '仓库': inv.warehouse.name,
         '在手量': onHand,
         '锁定量': locked,
-        '可用量': onHand - locked,
+        // v1.2.4 B：可用量 = max(0, 在手 - 锁定)，不导出负数
+        '可用量': calcAvailableNumber(onHand, locked),
         '平均成本': avgCost,
         '库存金额': Math.round(onHand * avgCost * 100) / 100,
       };

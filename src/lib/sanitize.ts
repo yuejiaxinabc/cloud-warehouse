@@ -29,16 +29,20 @@ export function sanitizeKeyword(input: unknown, maxLen = 100): string {
 }
 
 /**
- * 纯文本净化（用于用户名、姓名等，不允许任何 HTML）
- * 去除标签、反斜杠、换行等危险字符
+ * 纯文本净化（用于用户名、姓名、商品名等，不允许任何 HTML）
+ * 去除标签、反斜杠、换行等危险字符。
+ * v1.2.4 B：先去标签/危险字符再截断（此前先截断，超长标签串截断后
+ * 可能残留半个标签）；入库前统一走本函数，展示时 React 再转义一次。
  */
 export function sanitizeText(input: unknown, maxLen = 200): string {
   if (!input) return "";
   return String(input)
     .trim()
-    .slice(0, maxLen)
     .replace(/<[^>]*>/g, "")       // 去除 HTML 标签
-    .replace(/[<>'"&\\]/g, "");    // 去除 XSS 特殊字符
+    .replace(/[<>'"&\\]/g, "")    // 去除 XSS 特殊字符
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "") // 去除控制字符
+    .trim()
+    .slice(0, maxLen);
 }
 
 /** 数字 ID 安全解析（NaN 抛错，防止注入） */

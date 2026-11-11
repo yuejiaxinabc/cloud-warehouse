@@ -1,11 +1,14 @@
 'use client';
+import { fetchAllPages } from '@/lib/fetch-all-pages';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Card, Table, Button, Space, Input, Select, Tag, Row, Col, Modal, Form, message, Typography, InputNumber } from 'antd';
 import { PlusOutlined, SearchOutlined, CheckCircleOutlined, ScanOutlined, EyeOutlined, ReloadOutlined, CameraOutlined } from '@ant-design/icons';
 import dynamic from "next/dynamic";
 const BarcodeScanner = dynamic(() => import("@/components/BarcodeScanner"), { ssr: false });
 import { useRouter } from 'next/navigation';
+// L4：状态展示统一走 StatusBadge（中文映射唯一出口）
+import { OrderStatusBadge } from '@/components/ui/StatusBadge';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -28,8 +31,25 @@ export default function StockOutPage() {
   const [customers, setCustomers] = useState<any[]>([]);
   const [isMobile, setIsMobile] = useState(false);
   const [loading, setLoading] = useState(false);
+  // F4：过账确认框单例锁 + 按钮 loading，双击不会再叠出第二个确认框
+  const confirmLockRef = useRef(false);
+  const [postingId, setPostingId] = useState<number | null>(null);
   const [form] = Form.useForm();
   const [scanForm] = Form.useForm();
+  // 明细实时快照：数量/单价一改，行小计与合计立刻跟着变（原来要提交后才算出金额）
+  const itemsWatch = Form.useWatch('items', form) as Array<{ quantity?: number; unitPrice?: number }> | undefined;
+  const formTotals = useMemo(() => {
+    const rows = Array.isArray(itemsWatch) ? itemsWatch : [];
+    let qty = 0;
+    let amount = 0;
+    for (const r of rows) {
+      const q = Number(r?.quantity) || 0;
+      const p = Number(r?.unitPrice) || 0;
+      qty += q;
+      amount += q * p;
+    }
+    return { qty, amount };
+  }, [itemsWatch]);
   const router = useRouter();
 
   
@@ -60,9 +80,8 @@ export default function StockOutPage() {
 
   const loadProducts = async () => {
     try {
-      const res = await fetch('/api/products?pageSize=1000');
-      const data = await res.json();
-      if (data.success) setProducts(data.data?.items || []);
+      const items = await fetchAllPages('/api/products');
+      setProducts(items);
     } catch (e) { console.error(e); }
   };
 
@@ -159,13 +178,18 @@ export default function StockOutPage() {
     }
   };
 
-  const handleCameraScan = (code: string) => {
+  // 摄像头回调必须身份稳定：BarcodeScanner 的启动 effect 依赖 onScan，
+  // 内联箭头函数每次渲染都变，会导致摄像头反复 stop/重启动、一直卡在“正在启动摄像头…”
+  // 另：表单字段是 code，此前内联回调误写 barcode，扫码后查不到商品
+  const handleScanRef = useRef(handleScan);
+  handleScanRef.current = handleScan;
+  const handleCameraScan = useCallback((code: string) => {
     setShowCamera(false);
     message.success(`扫码成功: ${code}`);
     // Auto-fill and trigger scan
     scanForm.setFieldsValue({ code: code });
-    handleScan();
-  };
+    handleScanRef.current();
+  }, []);
 
   const handleScanSelect = async () => {
     if (!scanResult) return;
@@ -187,10 +211,20 @@ export default function StockOutPage() {
     if (price > 0) message.success(`已自动填入价格: ¥${price.toFixed(2)}`);
   };
 
-  const handlePost = async (id: number) => {
+  /**
+   * F4 修复：过账确认框单例防重入——第一次点击立即置位 confirmLock，
+   * 第二次点击直接 return，不会再叠出第二个 Modal.confirm 把页面锁死；
+   * 确认框真正关闭后再在 afterClose 解锁。
+   */
+  const handlePost = (id: number) => {
+    if (confirmLockRef.current) return;
+    confirmLockRef.current = true;
+    setPostingId(id);
     Modal.confirm({
       title: '确认过账',
       content: '过账后将更新库存，确定要过账吗？',
+      okText: '确认过账',
+      cancelText: '取消',
       onOk: async () => {
         try {
           const res = await fetch(`/api/stock-out/${id}/post`, { method: 'POST' });
@@ -203,8 +237,12 @@ export default function StockOutPage() {
           }
         } catch (e) {
           message.error('过账失败');
+        } finally {
+          setPostingId(null);
         }
       },
+      onCancel: () => setPostingId(null),
+      afterClose: () => { confirmLockRef.current = false; },
     });
   };
 
@@ -220,18 +258,29 @@ export default function StockOutPage() {
     { title: '使用部门', dataIndex: 'department', key: 'department', width: 100, render: (t: string) => t || '-' },
     { title: '总数量', dataIndex: 'totalQty', key: 'totalQty', width: 80, render: (v: any) => <span style={{ fontWeight: 600 }}>{Number(v || 0)}</span> },
     { title: '总金额', dataIndex: 'totalAmount', key: 'totalAmount', width: 100, render: (v: any) => v ? <span style={{ color: '#f5222d' }}>¥{Number(v).toFixed(2)}</span> : '-' },
-    { title: '状态', dataIndex: 'status', key: 'status', width: 80, render: (s: string) => {
-      const map: Record<string, { label: string; color: string }> = { DRAFT: { label: '草稿', color: 'default' }, APPROVED: { label: '已审批', color: 'blue' }, LOCKED: { label: '已锁定', color: 'processing' }, POSTED: { label: '已过账', color: 'success' }, CANCELLED: { label: '已取消', color: 'error' } };
-      const st = map[s] || { label: s, color: 'default' };
-      return <Tag color={st.color}>{st.label}</Tag>;
-    }},
-    { title: '创建时间', dataIndex: 'createdAt', key: 'createdAt', width: 120, render: (t: string) => t ? new Date(t).toLocaleDateString('zh-CN') : '-' },
+    // F10：窄屏横向滚动时「状态」列会滑出可视区，移动端固定到右侧保证可读
+    { title: '状态', dataIndex: 'status', key: 'status', width: 80, fixed: isMobile ? ('right' as const) : undefined,
+      // L4：旧映射缺项时会把状态码直出英文，统一走 OrderStatusBadge
+      render: (s: string) => <OrderStatusBadge status={s} /> },
+    // P2-1：原来 120px 用本地化日期（2026/11/11），列一被挤就只剩「2026/」。
+    // 改成定长 YYYY-MM-DD + 加宽，任何宽度下都不会出现半截日期。
+    { title: '创建时间', dataIndex: 'createdAt', key: 'createdAt', width: 150, render: (t: string) => {
+        if (!t) return '-';
+        const d = new Date(t);
+        if (Number.isNaN(d.getTime())) return '-';
+        const p = (n: number) => String(n).padStart(2, '0');
+        return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+      } },
     { title: '操作', key: 'action', width: 180, fixed: 'right' as const,
       render: (_: any, record: any) => (
         <Space>
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => router.push(`/stock-out/${record.id}`)}>查看</Button>
+          {/* F3+L5：仅草稿渲染「过账」，其余状态只给详情，避免点了才被服务端拒绝 */}
           {(record.status === 'DRAFT' || record.status === 'draft') && (
-            <Button type="link" size="small" icon={<CheckCircleOutlined />} onClick={() => handlePost(record.id)}>过账</Button>
+            <Button type="link" size="small" icon={<CheckCircleOutlined />}
+              loading={postingId === record.id}
+              disabled={postingId === record.id}
+              onClick={() => handlePost(record.id)}>过账</Button>
           )}
         </Space>
       ),
@@ -270,7 +319,8 @@ export default function StockOutPage() {
       </Card>
 
       <Card>
-        <Table columns={columns} dataSource={orders} loading={loading} rowKey="id" scroll={{ x: 1200 }} scroll={{ x: isMobile ? 800 : undefined }}
+        {/* v1.2.1：原来重复写了两个 scroll 属性（TS17001），合并成响应式的一份 */}
+        <Table columns={columns} dataSource={orders} loading={loading} rowKey="id" scroll={{ x: isMobile ? 800 : 1200 }}
             pagination={{ pageSize: 10 }} size="small" />
       </Card>
 
@@ -340,9 +390,16 @@ export default function StockOutPage() {
                   <Text strong>出库商品</Text>
                   <Button type="dashed" onClick={() => add()} icon={<PlusOutlined />} size="small">添加商品</Button>
                 </div>
+                <Row gutter={8} style={{ marginBottom: 2, fontSize: 12, color: '#8C96A5' }}>
+                  <Col span={8}>商品</Col>
+                  <Col span={4}>数量</Col>
+                  <Col span={6}>单价（元）</Col>
+                  <Col span={4} style={{ textAlign: 'right' }}>小计</Col>
+                  <Col span={2} />
+                </Row>
                 {fields.map(({ key, name, ...restField }) => (
                   <Row key={key} gutter={8} style={{ marginBottom: 8 }}>
-                    <Col span={10}>
+                    <Col span={8}>
                       <Form.Item {...restField} name={[name, 'productId']} rules={[{ required: true, message: '请选择商品' }]}>
                         <Select 
                           placeholder="输入编码/名称搜索商品" 
@@ -359,12 +416,17 @@ export default function StockOutPage() {
                         />
                       </Form.Item>
                     </Col>
-                    <Col span={5}>
+                    <Col span={4}>
                       <Form.Item {...restField} name={[name, 'quantity']} rules={[{ required: true, message: '请输入数量' }]}>
-                        <InputNumber placeholder="数量" min={1} style={{ width: '100%' }} />
+                        <InputNumber
+                          placeholder="数量"
+                          min={1}
+                          style={{ width: '100%' }}
+                          onChange={() => { /* 小计由 itemsWatch 实时重算，这里只触发重渲染 */ }}
+                        />
                       </Form.Item>
                     </Col>
-                    <Col span={7}>
+                    <Col span={6}>
                       <Form.Item {...restField} name={[name, 'unitPrice']}>
                         <InputNumber 
                           placeholder="选择商品后自动填入" 
@@ -386,6 +448,14 @@ export default function StockOutPage() {
                         />
                       </Form.Item>
                     </Col>
+                    <Col span={4}>
+                      {/* 小计 = 数量 × 单价：实时跟随输入变化，不再需要提交后才知道金额 */}
+                      <Form.Item label=" " colon={false} style={{ marginBottom: 8 }}>
+                        <div style={{ height: 32, lineHeight: '32px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#B42318', fontWeight: 600 }}>
+                          ¥{((Number(itemsWatch?.[name]?.quantity) || 0) * (Number(itemsWatch?.[name]?.unitPrice) || 0)).toFixed(2)}
+                        </div>
+                      </Form.Item>
+                    </Col>
                     <Col span={2}>
                       <Button type="link" danger onClick={() => remove(name)}>删除</Button>
                     </Col>
@@ -395,6 +465,16 @@ export default function StockOutPage() {
             )}
           </Form.List>
 
+          {/* 合计：数量与金额随明细实时重算 */}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 24, padding: '6px 2px 10px', borderTop: '1px dashed #E7EBF0', marginTop: 4 }}>
+            <span style={{ color: '#5A6577' }}>
+              合计数量：<b style={{ fontVariantNumeric: 'tabular-nums' }}>{formTotals.qty}</b>
+            </span>
+            <span style={{ color: '#5A6577' }}>
+              合计金额：<b style={{ color: '#B42318', fontVariantNumeric: 'tabular-nums' }}>¥{formTotals.amount.toFixed(2)}</b>
+            </span>
+          </div>
+
           <Form.Item name="remark" label="备注">
             <TextArea rows={2} placeholder="输入备注信息" />
           </Form.Item>
@@ -402,13 +482,15 @@ export default function StockOutPage() {
       </Modal>
 
       {/* 扫码出库弹窗 */}
-      <Modal title="扫码出库" open={scanModalOpen} onCancel={() => { setScanModalOpen(false); setScanResult(null); setShowCamera(false); }} footer={null} width={isMobile ? "95%" : 500}>
+      {/* L6：destroyOnClose 让关闭的弹窗卸载，避免扫码弹窗与手动出库弹窗同时挂载出现重复的 warehouseId/code id */}
+      <Modal title="扫码出库" open={scanModalOpen} destroyOnClose onCancel={() => { setScanModalOpen(false); setScanResult(null); setShowCamera(false); }} footer={null} width={isMobile ? "95%" : 500}>
         <Form form={scanForm} layout="vertical">
           <Form.Item label="扫码识别">
             {showCamera ? (
               <div style={{ marginBottom: 12 }}>
-                <BarcodeScanner onScan={(code) => { setShowCamera(false); message.success(`扫码成功: ${code}`); scanForm.setFieldsValue({ barcode: code }); handleScan(); }} onClose={() => setShowCamera(false)} />
-                <Button block style={{ marginTop: 8 }} onClick={() => setShowCamera(false)}>关闭摄像头</Button>
+                <BarcodeScanner onScan={handleCameraScan} onClose={() => setShowCamera(false)} />
+                <Button block style={{ marginTop: 8 }} onClick={() => setShowCamera(false)}>关闭摄像头，改用手动输入</Button>
+                <div style={{ fontSize: 12, color: "#64748B", marginTop: 6 }}>摄像头无法启动时，可直接在下方输入框手动输入条码后点“查询”</div>
               </div>
             ) : (
               isMobile && (
@@ -433,7 +515,7 @@ export default function StockOutPage() {
       </Modal>
     
       {/* 快速添加商品弹窗 */}
-      <Modal title="快速添加商品" open={quickAddOpen} onCancel={() => setQuickAddOpen(false)} footer={null} width={isMobile ? "95%" : 480}>
+      <Modal title="快速添加商品" open={quickAddOpen} destroyOnClose onCancel={() => setQuickAddOpen(false)} footer={null} width={isMobile ? "95%" : 480}>
         <Form layout="vertical" onFinish={async (values) => {
           try {
             const res = await fetch("/api/products", {

@@ -9,7 +9,8 @@ import { useRouter } from 'next/navigation';
 import type { ColumnsType } from 'antd/es/table';
 import SearchBar from '@/components/ui/SearchBar';
 import DataTable from '@/components/ui/DataTable';
-import { StatusBadge } from '@/components/ui/StatusBadge';
+// L4：状态统一走中文映射（StatusBadge 内部补齐了 SHIPPED/COMPLETED 等码）
+import { OrderStatusBadge } from '@/components/ui/StatusBadge';
 import ActionButtons from '@/components/ui/ActionButtons';
 
 const { Title } = Typography;
@@ -23,13 +24,6 @@ const filterFields = [
     { label: '已完成', value: 'COMPLETED' },
   ]},
 ];
-
-const statusMap: Record<string, string> = {
-  DRAFT: 'draft',
-  APPROVED: 'approved',
-  SHIPPED: 'shipped',
-  COMPLETED: 'completed',
-};
 
 export default function TransfersPage() {
   const router = useRouter();
@@ -76,7 +70,8 @@ export default function TransfersPage() {
     { title: '单号', dataIndex: 'orderNo', key: 'orderNo', width: 180, render: (t: string) => <span style={{ fontFamily: 'monospace', fontWeight: 500, color: '#1976D2' }}>{t}</span> },
     { title: '源仓库', key: 'sourceWarehouse', width: 100, render: (_, r) => (r as any).fromWarehouse?.name || '-' },
     { title: '目的仓库', key: 'targetWarehouse', width: 100, render: (_, r) => (r as any).toWarehouse?.name || '-' },
-    { title: '状态', dataIndex: 'status', key: 'status', width: 100, render: (s: string) => <StatusBadge status={statusMap[s] as any || 'draft'} /> },
+    // L4：旧写法把状态映射成小写再交给 StatusBadge，缺项会回落成英文码；直接出原始状态码由全局中文表翻译
+    { title: '状态', dataIndex: 'status', key: 'status', width: 100, render: (s: string) => <OrderStatusBadge status={String(s)} /> },
     { title: '总数量', key: 'totalQty', width: 90, render: (_, r) => {
       const items = (r as any).transferItems || [];
       const total = items.reduce((sum: number, i: any) => sum + Number(i.quantity || 0), 0);

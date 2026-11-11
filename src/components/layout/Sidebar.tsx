@@ -13,15 +13,24 @@ import {
   QrcodeOutlined, TagsOutlined, FileExcelOutlined, ClusterOutlined,
   DollarOutlined, FileTextOutlined, ShopOutlined, TeamOutlined,
   MenuOutlined, AppstoreOutlined, ShoppingCartOutlined, PieChartOutlined,
-  ScanOutlined, DownOutlined, RocketOutlined, FundProjectionScreenOutlined, DeleteOutlined, SafetyOutlined, ExperimentOutlined,
+  ScanOutlined, DownOutlined, RocketOutlined, FundProjectionScreenOutlined, DeleteOutlined, SafetyOutlined, ExperimentOutlined, BookOutlined,
+  CloudDownloadOutlined,
 } from "@ant-design/icons";
 import { LogoMark } from "@/components/brand/Logo";
 
 const { Sider, Header, Content } = Layout;
 const { Text } = Typography;
 
-const APP_VERSION = "1.2.0";
+// 版本号不再硬编码：由 /api/system/version 下发（package.json.version），
+// 顺带拿到「远端是否有新版本」，侧栏才能提示并跳转到设置页的检查更新。
 const COLLAPSE_KEY = "yc.sider.collapsed";
+
+type VersionState = {
+  local: string;
+  remote: string | null;
+  hasUpdate: boolean;
+  hubReachable: boolean;
+};
 
 /** 分组菜单：默认折叠，点开才展开，避免一屏堆 23 个入口 */
 type NavNode = {
@@ -78,7 +87,6 @@ const NAV: NavNode[] = [
       { key: "/reports", icon: <BarChartOutlined />, label: "报表中心" },
       { key: "/serial", icon: <QrcodeOutlined />, label: "序列号追踪" },
       { key: "/labels", icon: <TagsOutlined />, label: "条码打印" },
-      { key: "/export", icon: <FileExcelOutlined />, label: "Excel 导出" },
       { key: "/cost", icon: <DollarOutlined />, label: "成本核算" },
       { key: "/screen", icon: <FundProjectionScreenOutlined />, label: "现场大屏" },
     ],
@@ -92,6 +100,9 @@ const NAV: NavNode[] = [
       { key: "/setup", icon: <RocketOutlined />, label: "初始化向导" },
       { key: "/trash", icon: <DeleteOutlined />, label: "回收站" },
       { key: "/security", icon: <SafetyOutlined />, label: "安全与集成" },
+      { key: "/dict", icon: <BookOutlined />, label: "字典管理" },
+      { key: "/organizations", icon: <TeamOutlined />, label: "组织管理" },
+      { key: "/backup", icon: <CloudDownloadOutlined />, label: "数据备份" },
       { key: "/settings", icon: <SettingOutlined />, label: "系统设置" },
     ],
   },
@@ -136,8 +147,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  // 版本信息：先按 package.json 兜底显示，接口回来再覆盖（避免首屏空白）
+  const [version, setVersion] = useState<VersionState>({ local: '1.2.4', remote: null, hasUpdate: false, hubReachable: false });
   const [openKeys, setOpenKeys] = useState<string[]>([]);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
+  const [alertsError, setAlertsError] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
   const companyName = "云仓智能仓储管理平台";
 
@@ -171,14 +185,19 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const fetchAlerts = async () => {
       try {
-        const res = await fetch("/api/alerts?pageSize=10");
+        // F12：角标口径必须与预警中心一致。
+        // 原来只取前 10 条并数 UNREAD，和中心列表总数对不上（10 vs 实际条数）。
+        // 现在同样取 type=all，角标用接口返回的 total。
+        const res = await fetch("/api/alerts?type=all&pageSize=10");
         const data = await res.json();
+        if (!res.ok || !data.success) throw new Error("alerts");
+        setAlertsError("");
         if (data.success) {
           const items = data.data?.items || [];
           setAlerts(items);
-          setUnreadCount(items.filter((a: AlertItem) => a.status === "UNREAD").length);
+          setUnreadCount(Number(data.data?.total ?? items.length));
         }
-      } catch {}
+      } catch { setAlertsError("预警加载失败，将自动重试；可打开预警中心查看"); }
     };
     fetchAlerts();
     const timer = setInterval(fetchAlerts, 60_000);
@@ -193,13 +212,44 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     } catch {}
   };
 
+  // 版本检查：登录后拉一次，并且每 10 分钟再看一次。
+  // 「所有联网的云仓设备都能收到新版本通知」靠的就是这个轮询：
+  // 后台发布后，最迟 10 分钟（服务端另有 60 秒缓存）侧栏就会出现提示，不需要用户刷新页面。
+  // 更新中心连不上时静默保持「无更新」，绝不因为远端不可达而报错打扰用户。
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      fetch('/api/system/version', { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (!alive || !d?.success || !d.data) return;
+          setVersion({
+            local: d.data.local,
+            remote: d.data.remote,
+            hasUpdate: !!d.data.hasUpdate,
+            hubReachable: !!d.data.hubReachable,
+          });
+        })
+        .catch(() => {});
+    };
+    load();
+    const timer = setInterval(load, 10 * 60 * 1000);
+    const onVisible = () => { if (document.visibilityState === 'visible') load(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
+
   const goto = (key: string) => {
     router.push(key);
     if (isMobile) setMobileOpen(false);
   };
 
   const alertMenu: MenuProps["items"] =
-    alerts.length > 0
+    alertsError ? [{key: "load-error", label: <span role="status">{alertsError}</span>, onClick: () => goto("/alerts")}] : alerts.length > 0
       ? [
           ...alerts.slice(0, 5).map((alert) => ({
             key: alert.id,
@@ -298,8 +348,20 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
       {!collapsed && (
         <div className="yc-nav-foot">
-          <span>v{APP_VERSION}</span>
-          <span>{new Date().getFullYear()} · 云仓</span>
+          <span>v{version.local}</span>
+          {version.hasUpdate ? (
+            // 有新版本：版本号后面直接给一个可点的提示，点一下进设置页的检查更新
+            <button
+              type="button"
+              className="yc-update-pill"
+              title={'发现新版本 ' + version.remote + '，点击查看'}
+              onClick={() => goto('/settings?tab=update')}
+            >
+              新版本 {version.remote} · 立即前往更新
+            </button>
+          ) : (
+            <span>{new Date().getFullYear()} · 云仓</span>
+          )}
         </div>
       )}
     </div>
@@ -333,6 +395,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           onClose={() => setMobileOpen(false)}
           width={252}
           closable={false}
+          className="yc-mobile-drawer"
           styles={{ body: { padding: 0 } }}
         >
           {nav}
@@ -389,7 +452,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </Space>
         </Header>
 
-        <Content className="yc-content">{children}</Content>
+        <Content className="yc-content yc-stagger">{children}</Content>
       </Layout>
     </Layout>
   );

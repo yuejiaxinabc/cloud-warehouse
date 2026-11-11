@@ -1,9 +1,49 @@
 # 云仓反向代理示例（保存为 /etc/nginx/sites-available/cloud-warehouse 后软链到 sites-enabled）
-# 关键：必须透传 Host 与 X-Forwarded-*，否则 Next.js 中间件无法还原用户真实访问地址。
+#
+# 安全基线（L1/L2/L3）：
+#   1) 生产必须上 HTTPS：密码、会话 Cookie、单据数据都是明文提交，HTTP 下的 WMS 等于公开账本；
+#   2) 80 端口只做 301 跳转，不再承载业务；
+#   3) 应用侧配套：NEXTAUTH_URL=https://<域名> 或 COOKIE_SECURE=true（见 docs/DEPLOYMENT.md），
+#      否则浏览器会丢弃 Secure Cookie 导致登录失效。
+#
+# 只有公网 IP、暂时没有域名时：Let's Encrypt 不签 IP 证书，
+# 可先用自签证书，或改用云厂商的「IP 证书 / 免费 DV 证书」，把下面 server_name 换成 IP。
+
+# ---------- 1) HTTP → HTTPS ----------
 server {
     listen 80;
     listen [::]:80;
-    server_name _;                    # 改成你的域名或公网 IP
+    server_name your-domain.com;      # 改成域名或公网 IP
+
+    # 证书续期校验目录必须放行，否则 certbot renew 失败
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# ---------- 2) HTTPS 主站 ----------
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name your-domain.com;
+
+    ssl_certificate     /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    # HSTS：确认全站 HTTPS 可用后再开；一旦开了预加载，回退成本很高
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
     client_max_body_size 30m;
 
@@ -23,30 +63,13 @@ server {
 
         proxy_read_timeout 300s;
     }
-}
 
-# 启用 HTTPS 时用下面这段替换上面的 server 块（证书可用 certbot 申请）
-# server {
-#     listen 443 ssl;
-#     listen [::]:443 ssl;
-#     http2 on;
-#     server_name your-domain.com;
-#
-#     ssl_certificate     /etc/letsencrypt/live/your-domain.com/fullchain.pem;
-#     ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
-#
-#     client_max_body_size 30m;
-#
-#     location / {
-#         proxy_pass http://127.0.0.1:3000;
-#         proxy_http_version 1.1;
-#         proxy_set_header Upgrade $http_upgrade;
-#         proxy_set_header Connection "upgrade";
-#         proxy_set_header Host $http_host;
-#         proxy_set_header X-Real-IP $remote_addr;
-#         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-#         proxy_set_header X-Forwarded-Host $http_host;
-#         proxy_set_header X-Forwarded-Proto $scheme;
-#         proxy_read_timeout 300s;
-#     }
-# }
+    # 可选：上传目录交给 nginx 直出（应用内已有 /uploads 路由，二者取其一即可）
+    # location /uploads/ {
+    #     alias /var/lib/cloud-warehouse/uploads/;
+    #     expires 30d;
+    #     add_header X-Content-Type-Options "nosniff" always;
+    #     # 上传目录禁止任何脚本解释执行
+    #     location ~* \.(php|jsp|asp|sh)$ { deny all; }
+    # }
+}

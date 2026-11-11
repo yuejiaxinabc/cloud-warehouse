@@ -1,3 +1,4 @@
+import { businessAccess, warehouseWhere, withWarehouseScope } from '@/app/api/warehouse/access';
 import { handleApiError } from "@/lib/errors";
 import { getServerSession } from 'next-auth';
 import { NextRequest, NextResponse } from "next/server";
@@ -7,6 +8,7 @@ import { serializeBigInt } from "@/lib/serialize";
 
 export async function GET(req: NextRequest) {
   try {
+    const { scope } = await businessAccess('product:view');
     const { searchParams } = new URL(req.url);
     const keyword = searchParams.get("keyword") || "";
 
@@ -31,6 +33,7 @@ export async function GET(req: NextRequest) {
         category: true,
         unit: true,
         inventories: {
+          where: withWarehouseScope({}, scope),
           include: {
             warehouse: true,
             locationStocks: {

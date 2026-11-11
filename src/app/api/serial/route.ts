@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
+import { handleApiError } from '@/lib/errors';
 
 /**
  * GET /api/serial - 序列号/商品变动追踪查询
@@ -181,7 +182,7 @@ export async function GET(req: NextRequest) {
       data: serializeBigInt({ list, total, page, pageSize }),
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }
 
@@ -214,6 +215,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, data: serializeBigInt({ ...serial, sn: serial.serialNo }) });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }

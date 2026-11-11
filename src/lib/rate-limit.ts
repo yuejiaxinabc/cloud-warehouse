@@ -65,6 +65,43 @@ export async function reset(key: string): Promise<void> {
   mem.delete(key);
 }
 
+/**
+ * 账号维度临时锁定（L7）
+ *
+ * 固定窗口计数只能「限速」，打满窗口后计数归零、攻击者可以继续。
+ * 这里额外落一个带 TTL 的锁键：连续失败达到阈值后锁定 30 分钟，
+ * 锁键按账号（而不是 IP）计，换 IP 也绕不过去。
+ */
+export async function lockKey(key: string, ttlMs: number): Promise<void> {
+  const ttl = Math.max(1000, ttlMs);
+  if (shouldUseRedis()) {
+    try {
+      await redis.set('lock:' + key, '1', 'PX', ttl);
+      return;
+    } catch {
+      redisDisabledUntil = Date.now() + REDIS_RETRY_MS;
+    }
+  }
+  mem.set('lock:' + key, { count: 1, resetAt: Date.now() + ttl });
+}
+
+export async function isLocked(key: string): Promise<boolean> {
+  if (shouldUseRedis()) {
+    try {
+      return (await redis.exists('lock:' + key)) === 1;
+    } catch {
+      redisDisabledUntil = Date.now() + REDIS_RETRY_MS;
+    }
+  }
+  const e = mem.get('lock:' + key);
+  if (!e) return false;
+  if (Date.now() > e.resetAt) {
+    mem.delete('lock:' + key);
+    return false;
+  }
+  return true;
+}
+
 /** 兼容 Headers 实例与 next-auth 传入的普通对象两种形态 */
 export type HeaderLike = Headers | Record<string, string | string[] | undefined>;
 

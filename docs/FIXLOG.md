@@ -5,6 +5,35 @@
 
 ---
 
+## FIX-2026-2011 · 第三方深度测试整改批（P0×3 / P1×7 / P2×5，已修复）
+
+| 项目 | 内容 |
+|------|------|
+| 日期 | 2026-10-31 |
+| 严重程度 | 🔴 P0 ×3 / 🟠 P1 ×7 / 🟡 P2 ×5 |
+| 来源 | 《云仓智能仓储管理平台 — 深度功能测试 + 安全评估报告》（82.156.236.221，2026-10-29 ~ 10-31） |
+| 影响范围 | 库存完整性、过账并发、会话吊销、上传链路、重置令牌、验证码、错误出口、列表筛选 |
+
+| 子项 | 问题 | 根因 | 修复 | 位置 |
+|------|------|------|------|------|
+| H1 | 负数量单据可过账 → 负库存（-5）、负出库变成加库存（+3），加权平均成本被算成 22.5 亿且不可逆 | 建单只校验「已登录」，过账直接信任明细里的 quantity；成本公式在 oldQty<0 时把负数乘进分子 | 建单 + 过账双重 `assertPositiveQty`/`assertNonNegativePrice`（>0、≤1e6、≤3 位小数、单价 0~1e8、金额 ≤1e12）；`onHand<0` 时不套公式，按本次入库价重建成本并写 `COST_REBUILD` 审计 | `src/lib/qty-guard.ts`、`src/services/stock-in.service.ts`、`src/services/stock-out.service.ts`、`src/app/api/stock-{in,out}/route.ts` |
+| H2 | 并发过账 5 连发 2 次成功，库存 +4（应 +2） | check-then-act：先读 DRAFT，再写库存与状态，两步之间无锁 | 事务首句 `SELECT id FROM <orders> WHERE id=? FOR UPDATE`；收尾 `updateMany({where:{id,status}})`，count=0 → 409 | `src/lib/order-lock.ts`、两个 service 的 `post()` |
+| H3 | 登出后旧 token 仍可访问 `/api/settings/profile` 直到 24h 过期 | NextAuth 无状态 JWE，signout 只清 Cookie | 登录写随机 `sid`；`events.signOut` 拉黑（Redis/内存，TTL=8h）；`requireLogin/requirePermission/requireAuth/requireAdmin` 校验吊销；会话 maxAge 24h→8h | `src/lib/session-revocation.ts`、`src/lib/auth.ts`、`src/lib/auth-guard.ts` |
+| M4 | 上传返回 `/uploads/xxx.png`，访问永远 404 | 只写了 `public/uploads`，没有路由/别名服务该路径（standalone 产物里 public 是构建期快照） | 新增 `app/uploads/[...path]/route.ts` 读盘回流（文件名白名单 + nosniff + 长缓存）；目录由 `UPLOAD_DIR` 决定；配套 `scripts/cleanup-uploads.mjs` 清孤儿 | `src/app/uploads/[...path]/route.ts`、`src/lib/upload-storage.ts`、`src/app/api/upload/route.ts` |
+| M5 | 全局重置令牌永不过期、一次性共用、API 无法清除 | 只存 hash，没有 expiresAt；重置成功后不删 | 令牌带 `expiresAt`（默认 24h、最长 7 天）；成功重置即作废；`clear-token/clear/remove-token/disable` 都可清除；签发/清除/重置写审计；verify 走 IP 限流 | `src/app/api/auth/admin-reset/route.ts` |
+| M6 | 验证码 SVG 点阵可 100% 程序化还原（path 指纹查表 8/8） | 字符 path 数据确定性，随机只在 transform 上 | 服务端光栅化 PNG：整体旋转/斜切 + 逐像素位置·尺寸·颜色抖动 + 干扰曲线 + 噪点；API 只回 base64 图片 | `src/lib/captcha-render.ts`、`src/app/api/auth/captcha/route.ts`、`src/app/login/page.tsx` |
+| M2/M3 | 越权与异常统一 500；Prisma 报文直返 | 各路由 catch 里 `safeErrorMessage + status 500` | 22 个路由改 `handleApiError`（401/403/422/409/503 各归其位）；`settings/upload`、`locations/available` 停止回显 `error.message` | 见 `docs/UPDATE-2026-10-31.md` 清单 |
+| L7 | 只有 IP 维度限流，换 IP 可继续爆破 | 账号维度只有 15 分钟窗口计数，没有硬锁 | 连续失败达阈值 → 账号锁 30 分钟（锁键按用户名，Redis/内存），并写 `account_locked` 审计 | `src/lib/rate-limit.ts`、`src/lib/auth.ts` |
+| F5/F6 | `type`/`sort` 参数被服务端忽略 | 路由没解析这两个参数 | 入库/出库列表补 type/status/warehouseId/日期；商品列表加排序白名单 | `src/app/api/stock-{in,out}/route.ts`、`src/app/api/products/route.ts` |
+| F8/F9 | `salePrice=1e15` / 负价 / 1000 字名称 → 「数据库操作失败」或脏数据 | 直接 `Number()` 后写库 | 按列宽校验 + 价格 0~1e8；创建与更新两条路径都过 `product-guard`，未知字段忽略 | `src/lib/product-guard.ts`、`src/app/api/products/route.ts`、`src/services/product.service.ts` |
+| B5 | `capacity=10` 的货位可入 1e9 件 | 过账不读 `locations.capacity` | 过账时校验「已用 + 本次 ≤ capacity」，未配置视为不限量 | `src/services/stock-in.service.ts` |
+
+**复核未发现问题**：B7 超卖拦截、B8 货位同品逻辑、B9 FEFO 扣减（实测通过，本次未改）。
+
+**验证**：`npx tsc --noEmit` 改动区域无新增错误；`npm run build` 通过；按 `docs/UPDATE-2026-10-31.md` 第六节 8 条手工回归全部符合预期。
+
+---
+
 ## FIX-2026-1025 · `Role` 表被清空导致全员无法登录（P0，已修复）
 
 | 项目 | 内容 |

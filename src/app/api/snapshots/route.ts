@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
 import { requireAuth } from '@/lib/auth-guard';
+import { handleApiError } from '@/lib/errors';
 
 /**
  * 库存日结快照（v1.3）
@@ -72,6 +73,6 @@ export async function GET(req: NextRequest) {
       },
     }));
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message || '快照查询失败' }, { status: 500 });
+    return handleApiError(error);
   }
 }

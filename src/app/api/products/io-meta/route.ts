@@ -1,3 +1,4 @@
+import { businessAccess, warehouseWhere, withWarehouseScope } from '@/app/api/warehouse/access';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, authErrorResponse } from '@/lib/auth-guard';
 import { prisma } from '@/lib/prisma';
@@ -10,9 +11,9 @@ import { prisma } from '@/lib/prisma';
  */
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(req);
+    const { scope } = await businessAccess('product:view');
     const warehouses = await prisma.warehouse.findMany({
-      where: { status: 1 },
+      where: { ...warehouseWhere(scope), status: 1 },
       select: { id: true, name: true, code: true },
       orderBy: { id: 'asc' },
     });

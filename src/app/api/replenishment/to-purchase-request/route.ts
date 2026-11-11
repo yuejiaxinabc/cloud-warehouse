@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
-import { requireAuth } from '@/lib/auth-guard';
+import { requireAuth, requirePermission } from '@/lib/auth-guard';
 import { writeLog, getClientIp } from '@/lib/log';
+import { safeErrorMessage } from '@/lib/errors';
 
 /**
  * POST /api/replenishment/to-purchase-request
@@ -12,8 +13,9 @@ import { writeLog, getClientIp } from '@/lib/log';
  * 已存在同名 PENDING 申请的不重复建单。
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
   try {
+    // v1.2.1：补货转采购申请同样需要采购/仓储写权限（P0-1）
+    const auth = await requirePermission(['purchase:create', 'stock_in:create']);
     const uid = (auth as any)?.session?.user?.id;
     const body = await req.json().catch(() => ({}));
     const items: any[] = Array.isArray(body?.items) ? body.items : [];
@@ -85,6 +87,6 @@ export async function POST(req: NextRequest) {
       data: { created, skipped, createdCount: created.length, skippedCount: skipped.length },
     }));
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message || '生成购买申请失败' }, { status: 500 });
+    return NextResponse.json({ success: false, error: safeErrorMessage(error) || '生成购买申请失败' }, { status: 500 });
   }
 }

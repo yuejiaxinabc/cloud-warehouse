@@ -1,14 +1,18 @@
-import { getServerSession } from 'next-auth';
+import { getDataScope, withWarehouseScope, withDocumentScope, assertWarehouseAllowed, assertDocumentAllowed, type DataScope } from '@/lib/data-scope';
+import { requireAuth, requirePermission } from '@/lib/auth-guard';
 import { NextRequest, NextResponse } from 'next/server';
-import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
+import { handleApiError } from '@/lib/errors';
 
 /**
  * POST /api/stock-out/scan - 扫码查询商品
  */
 export async function POST(req: NextRequest) {
   try {
+    const auth = await requireAuth(req);
+    await requirePermission('stock_out:view', auth);
+    const scope = await getDataScope(auth.user);
     const body = await req.json();
     const { code } = body;
 
@@ -29,7 +33,7 @@ export async function POST(req: NextRequest) {
     // 2. 如果没找到，按序列号查找
     if (!product) {
       const serial = await prisma.serialNumber.findFirst({
-        where: { serialNo: code },
+        where: withWarehouseScope({ serialNo: code }, scope),
         include: { product: true },
       });
       if (serial) {
@@ -43,12 +47,12 @@ export async function POST(req: NextRequest) {
 
     // 3. 查询该商品的库存
     const inventories = await prisma.inventory.findMany({
-      where: { productId: product.id },
+      where: withWarehouseScope({ productId: product.id }, scope),
       include: { warehouse: true },
     });
 
     let totalStock = 0;
-    let warehouseId = null;
+    let warehouseId: number | null = null;
     let warehouseName = '';
     inventories.forEach(inv => {
       const qty = Number(inv.onHand || 0);
@@ -72,6 +76,6 @@ export async function POST(req: NextRequest) {
       }),
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }

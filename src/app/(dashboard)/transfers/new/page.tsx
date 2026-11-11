@@ -1,4 +1,5 @@
 'use client';
+import { fetchAllPages } from '@/lib/fetch-all-pages';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,9 +36,8 @@ export default function NewTransferPage() {
 
   const fetchProducts = useCallback(async () => {
     try {
-      const res = await fetch('/api/products?pageSize=1000');
-      const data = await res.json();
-      if (data.success) setProducts(data.data?.items || data.data?.list || []);
+      const items = await fetchAllPages('/api/products');
+      setProducts(items);
     } catch { /* ignore */ }
   }, []);
 

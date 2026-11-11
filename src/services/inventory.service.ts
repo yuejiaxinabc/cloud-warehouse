@@ -1,5 +1,7 @@
 import { prisma } from '@/lib/prisma';
+import { lockAvailable, unlockAvailable } from '@/lib/stock-atomic';
 import { Prisma } from '@prisma/client';
+import { calcAvailableNumber } from '@/lib/utils';
 
 /**
  * 库存服务
@@ -24,14 +26,12 @@ export class InventoryService {
     const inventoryWhere: Prisma.InventoryWhereInput = {};
     if (warehouseId) inventoryWhere.warehouseId = warehouseId;
 
+    // 商品侧条件统一构建，避免低库存分支与关键字分支各写一套导致的类型/语义漂移。
+    // P3-1：deletedAt: null —— 软删除商品的库存行不再出现在列表里，
+    // 否则用户会看到一个点不进去、也过不了账的「幽灵商品」。
+    const productWhere: Prisma.ProductWhereInput = { status: 1, deletedAt: null };
     // 低库存筛选：onHand <= safetyStock
-    if (lowStockOnly) {
-      inventoryWhere.product = {
-        safetyStock: { not: null },
-      };
-    }
-
-    const productWhere: Prisma.ProductWhereInput = { status: 1 };
+    if (lowStockOnly) productWhere.safetyStock = { not: null };
     if (categoryId) productWhere.categoryId = categoryId;
     if (keyword) {
       productWhere.OR = [
@@ -39,10 +39,7 @@ export class InventoryService {
         { code: { contains: keyword } },
       ];
     }
-
-    if (Object.keys(productWhere).length > 1 || keyword || categoryId) {
-      inventoryWhere.product = { ...inventoryWhere.product, ...productWhere };
-    }
+    inventoryWhere.product = productWhere;
 
     const [inventories, total] = await Promise.all([
       prisma.inventory.findMany({
@@ -66,7 +63,8 @@ export class InventoryService {
     const list = inventories.map((inv) => {
       const onHand = Number(inv.onHand);
       const locked = Number(inv.locked);
-      const available = onHand - locked;
+      // v1.2.4 B：可用量 = max(0, 在手 - 锁定)，不展示负数
+      const available = calcAvailableNumber(onHand, locked);
       const avgCost = inv.avgCost ? Number(inv.avgCost) : 0;
 
       return {
@@ -135,7 +133,7 @@ export class InventoryService {
         warehouseName: inv.warehouse.name,
         onHand,
         locked,
-        available: onHand - locked,
+        available: calcAvailableNumber(onHand, locked),
         avgCost,
       };
     });
@@ -144,7 +142,7 @@ export class InventoryService {
       productId,
       totalOnHand,
       totalLocked,
-      totalAvailable: totalOnHand - totalLocked,
+      totalAvailable: calcAvailableNumber(totalOnHand, totalLocked),
       totalValue,
       warehouses: details,
     };
@@ -172,7 +170,7 @@ export class InventoryService {
     });
 
     if (!inv) return 0;
-    return Number(inv.onHand) - Number(inv.locked);
+    return calcAvailableNumber(inv.onHand, inv.locked);
   }
 
   /**
@@ -196,18 +194,13 @@ export class InventoryService {
 
     if (!inv) throw new Error(`商品(${productId})在仓库(${warehouseId})无库存记录`);
 
-    const available = Number(inv.onHand) - Number(inv.locked);
-    if (available < quantity) {
+    // P0-1：条件更新原子锁定，避免并发下两张单都判定"够用"而重复占用
+    const locked = await lockAvailable(tx, inv.id, quantity);
+    if (locked === 0) {
+      const available = calcAvailableNumber(inv.onHand, inv.locked);
       throw new Error(`库存不足，可用: ${available}，需要: ${quantity}`);
     }
-
-    return tx.inventory.update({
-      where: { id: inv.id },
-      data: {
-        locked: { increment: quantity },
-        version: { increment: 1 },
-      },
-    });
+    return tx.inventory.findUniqueOrThrow({ where: { id: inv.id } });
   }
 
   /**
@@ -231,13 +224,9 @@ export class InventoryService {
 
     if (!inv) throw new Error(`商品(${productId})在仓库(${warehouseId})无库存记录`);
 
-    return tx.inventory.update({
-      where: { id: inv.id },
-      data: {
-        locked: { decrement: quantity },
-        version: { increment: 1 },
-      },
-    });
+    // 释放锁定：不会减成负数（GREATEST(0, ...)）
+    await unlockAvailable(tx, inv.id, quantity);
+    return tx.inventory.findUniqueOrThrow({ where: { id: inv.id } });
   }
 
   /**

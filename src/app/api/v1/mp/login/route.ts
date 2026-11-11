@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
+import { verifyTotp } from '@/lib/totp';
+import { hit, clientIp } from '@/lib/rate-limit';
 
 /**
  * POST /api/v1/mp/login - 小程序账号密码登录
@@ -10,6 +12,8 @@ import crypto from 'crypto';
  */
 export async function POST(req: NextRequest) {
   try {
+    const limit = await hit('mp:login:' + clientIp(req.headers), 10, 15 * 60 * 1000);
+    if (!limit.allowed) return NextResponse.json({ success: false, error: '尝试过于频繁，请稍后重试' }, { status: 429 });
     const body = await req.json();
     const { username, password } = body;
 
@@ -27,7 +31,7 @@ export async function POST(req: NextRequest) {
           { phone: account },
         ],
       },
-      select: { id: true, username: true, realName: true, status: true, password: true },
+      select: { id: true, username: true, realName: true, status: true, password: true, sessionVersion: true, twoFactorEnabled: true, totpSecret: true },
     });
 
     if (!user) {
@@ -43,7 +47,8 @@ export async function POST(req: NextRequest) {
     }
 
     // 签发会话 Token，30 天有效
-    const token = crypto.randomBytes(32).toString('hex');
+    if (user.twoFactorEnabled && (!user.totpSecret || !verifyTotp(user.totpSecret, String(body.totpCode || '')))) return NextResponse.json({ success: false, error: '请输入有效两步验证码' }, { status: 401 });
+    const token = 'v' + user.sessionVersion + '.' + crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     await prisma.mpSession.create({
       data: { token, userId: user.id, expiresAt },

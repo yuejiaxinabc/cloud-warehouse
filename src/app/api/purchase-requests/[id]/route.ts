@@ -1,3 +1,6 @@
+import { businessAccess, assertWarehouseAllowed } from '@/app/api/warehouse/access';
+import { withDocumentScope, assertDocumentAllowed } from '@/lib/data-scope';
+import { handleApiError } from '@/lib/errors';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
@@ -6,7 +9,7 @@ import { requireAuth, authErrorResponse } from '@/lib/auth-guard';
 // GET - 申请详情（所有登录用户）
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    await requireAuth();
+    const { scope, user } = await businessAccess(['purchase:view', 'stock_in:view']);
     const request = await prisma.purchaseRequest.findUnique({
       where: { id: BigInt(params.id) },
       include: {
@@ -19,16 +22,17 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     if (!request) {
       return NextResponse.json({ success: false, error: '申请不存在' }, { status: 404 });
     }
+    await assertDocumentAllowed(scope, user, { ...request, operatorId: request.applicantId });
     return NextResponse.json(serializeBigInt({ success: true, data: request }));
   } catch (error: any) {
-    return authErrorResponse(error);
+    return handleApiError(error);
   }
 }
 
 // PATCH - 修改申请 / 状态流转（所有登录用户）
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    await requireAuth();
+    const { scope, user } = await businessAccess(['purchase:create', 'stock_in:create']);
     const id = BigInt(params.id);
     const body = await req.json();
     const existing = await prisma.purchaseRequest.findUnique({ where: { id } });
@@ -36,6 +40,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       return NextResponse.json({ success: false, error: '申请不存在' }, { status: 404 });
     }
 
+    await assertDocumentAllowed(scope, user, { ...existing, operatorId: existing.applicantId });
     // 标记已采购：待采购 → 已采购(PURCHASING)
     if (body.action === 'purchase') {
       if (existing.status !== 'PENDING') {
@@ -81,22 +86,23 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     const updated = await prisma.purchaseRequest.update({ where: { id }, data });
     return NextResponse.json(serializeBigInt({ success: true, data: updated }));
   } catch (error: any) {
-    return authErrorResponse(error);
+    return handleApiError(error);
   }
 }
 
 // DELETE - 删除申请（所有登录用户，任何状态可删）
 export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    await requireAuth();
+    const { scope, user } = await businessAccess(['purchase:create', 'stock_in:create']);
     const id = BigInt(params.id);
     const existing = await prisma.purchaseRequest.findUnique({ where: { id } });
     if (!existing) {
       return NextResponse.json({ success: false, error: '申请不存在' }, { status: 404 });
     }
+    await assertDocumentAllowed(scope, user, { ...existing, operatorId: existing.applicantId });
     await prisma.purchaseRequest.delete({ where: { id } });
     return NextResponse.json({ success: true });
   } catch (error: any) {
-    return authErrorResponse(error);
+    return handleApiError(error);
   }
 }

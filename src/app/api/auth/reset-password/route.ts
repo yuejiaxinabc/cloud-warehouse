@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { authOptions } from '@/lib/auth';
 import { prisma } from "@/lib/prisma";
 import { serializeBigInt } from "@/lib/serialize";
+import { handleApiError } from '@/lib/errors';
 
 /** GET /api/auth/reset-password?token=xxx - 仅校验 token 是否有效 / 是否过期（不修改密码） */
 export async function GET(request: NextRequest) {
@@ -27,7 +28,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    if (user.verifyTokenExpires && new Date(user.verifyTokenExpires) < new Date()) {
+    if (!user.verifyTokenExpires || new Date(user.verifyTokenExpires) <= new Date()) {
       return NextResponse.json(
         serializeBigInt({ success: false, valid: false, expired: true, reason: "expired" })
       );
@@ -37,10 +38,7 @@ export async function GET(request: NextRequest) {
       serializeBigInt({ success: true, valid: true, username: user.username })
     );
   } catch (error: any) {
-    return NextResponse.json(
-      serializeBigInt({ success: false, valid: false, expired: false, error: error.message }),
-      { status: 500 }
-    );
+    return handleApiError(error);
   }
 }
 
@@ -74,7 +72,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 过期校验
-    if (user.verifyTokenExpires && new Date(user.verifyTokenExpires) < new Date()) {
+    if (!user.verifyTokenExpires || new Date(user.verifyTokenExpires) <= new Date()) {
       return NextResponse.json(
         serializeBigInt({ success: false, error: "重置链接已过期，请重新申请" }),
         { status: 400 }
@@ -90,22 +88,21 @@ export async function POST(request: NextRequest) {
     }
 
     const hashed = await bcrypt.hash(newPassword, 12);
-    await prisma.user.update({
-      where: { id: user.id },
+    const updated = await prisma.user.updateMany({
+      where: { id: user.id, status: 1, verifyToken: token, verifyTokenExpires: { gt: new Date() } },
       data: {
         password: hashed,
+        sessionVersion: { increment: 1 },
         verifyToken: null,
         verifyTokenExpires: null,
       },
     });
 
+    if (updated.count !== 1) return NextResponse.json({ success: false, error: "重置链接已失效" }, { status: 400 });
     return NextResponse.json(
       serializeBigInt({ success: true, message: "密码重置成功" })
     );
   } catch (error: any) {
-    return NextResponse.json(
-      serializeBigInt({ success: false, error: error.message }),
-      { status: 500 }
-    );
+    return handleApiError(error);
   }
 }

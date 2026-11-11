@@ -1,3 +1,6 @@
+import { getDataScope, withWarehouseScope, withDocumentScope, assertWarehouseAllowed, assertDocumentAllowed } from '@/lib/data-scope';
+import { hasPermissionGranted } from '@/lib/auth-guard';
+import { ForbiddenError } from '@/lib/errors';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
@@ -12,12 +15,17 @@ import { StockOutService } from '@/services/stock-out.service';
 export async function POST(req: NextRequest) {
   try {
     const auth = await requireMpToken(req);
+    for (const permission of ["stock_out:create","stock_out:approve","stock_out:post"]) {
+      if (!hasPermissionGranted(auth.user.permissions, permission)) throw new ForbiddenError('缺少业务操作权限');
+    }
+    const scope = await getDataScope(auth.user);
     const body = await req.json();
     const { code, quantity, warehouseId, remark } = body;
 
     if (!code || !quantity) {
       return NextResponse.json({ success: false, error: '缺少必填参数（编码/数量）' }, { status: 400 });
     }
+    if (warehouseId) await assertWarehouseAllowed(scope, Number(warehouseId));
     const qty = Number(quantity);
     if (qty <= 0) {
       return NextResponse.json({ success: false, error: '数量必须大于 0' }, { status: 400 });
@@ -28,7 +36,7 @@ export async function POST(req: NextRequest) {
       where: { OR: [{ barcode: code }, { code: code }] },
     });
     if (!product) {
-      const serial = await prisma.serialNumber.findFirst({ where: { serialNo: code } });
+      const serial = await prisma.serialNumber.findFirst({ where: withWarehouseScope({ serialNo: code }, scope) });
       if (serial) {
         product = await prisma.product.findUnique({ where: { id: serial.productId } });
       }
@@ -39,7 +47,7 @@ export async function POST(req: NextRequest) {
 
     // 确定出货仓库：指定 > 库存最多的仓库
     const inventories = await prisma.inventory.findMany({
-      where: { productId: product.id },
+      where: withWarehouseScope({ productId: product.id, ...(warehouseId ? { warehouseId: Number(warehouseId) } : {}) }, scope),
       include: { warehouse: { select: { name: true } } },
     });
     if (inventories.length === 0) {
@@ -60,14 +68,15 @@ export async function POST(req: NextRequest) {
 
     // 创建出库单 → 提交锁定 → 审批 → 过账（与 Web 端同一状态链）
     const order = await StockOutService.create({
+      operatorId: Number(auth.user.id),
       type: 'OTHER',
       warehouseId: Number(target.warehouseId),
       remark: remark || '小程序扫码出库',
       items: [{ productId: Number(product.id), quantity: qty }],
     });
-    await StockOutService.submitForApproval(Number(order.id));
-    await StockOutService.approve(Number(order.id), true, auth.userId || 0);
-    await StockOutService.post(Number(order.id));
+    await StockOutService.submitForApproval(Number(order.id), Number(auth.user.id));
+    await StockOutService.approve(Number(order.id), true, Number(auth.user.id));
+    await StockOutService.post(Number(order.id), Number(auth.user.id));
 
     return NextResponse.json(serializeBigInt({
       success: true,

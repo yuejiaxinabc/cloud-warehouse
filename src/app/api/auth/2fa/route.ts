@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth-guard';
 import { generateSecret, verifyTotp, otpauthUrl } from '@/lib/totp';
 import { writeLog, getClientIp } from '@/lib/log';
+import { handleApiError } from '@/lib/errors';
 
 /**
  * 两步验证（TOTP）
@@ -10,22 +11,23 @@ import { writeLog, getClientIp } from '@/lib/log';
  * GET    /api/auth/2fa  —— 查询当前状态
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
   try {
-    const uid = (auth as any)?.session?.user?.id;
-    if (!uid) return NextResponse.json({ success: true, data: { enabled: false } });
+    const auth = await requireAuth(req);
+    const uid = auth.type === 'session' ? (auth.session.user as any)?.id : auth.userId;
+    if (!uid) return NextResponse.json({ success: false, code: 401, error: '请先登录' }, { status: 401 });
     const user = await prisma.user.findUnique({ where: { id: BigInt(uid) }, select: { twoFactorEnabled: true } });
     return NextResponse.json({ success: true, data: { enabled: !!user?.twoFactorEnabled } });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: '查询失败' }, { status: 500 });
+    return handleApiError(error);
   }
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
   try {
-    const uid = (auth as any)?.session?.user?.id;
-    const username = (auth as any)?.session?.user?.username || 'user';
+    const auth = await requireAuth(req);
+    const uid = auth.type === 'session' ? (auth.session.user as any)?.id : auth.userId;
+    if (auth.type !== 'session') return NextResponse.json({ success: false, code: 403, error: '请使用账号会话管理两步验证' }, { status: 403 });
+    const username = (auth.session.user as any)?.username || 'user';
     if (!uid) return NextResponse.json({ success: false, error: '请先登录' }, { status: 401 });
 
     const body = await req.json().catch(() => ({}));
@@ -33,7 +35,8 @@ export async function POST(req: NextRequest) {
 
     if (action === 'setup') {
       const secret = generateSecret();
-      await prisma.user.update({ where: { id: BigInt(uid) }, data: { totpSecret: secret, twoFactorEnabled: false } });
+      const updated = await prisma.user.updateMany({ where: { id: BigInt(uid), status: 1, twoFactorEnabled: false }, data: { totpSecret: secret } });
+      if (updated.count !== 1) return NextResponse.json({ success: false, error: '两步验证已开启，请先使用当前动态码关闭' }, { status: 409 });
       return NextResponse.json({
         success: true,
         data: { secret, otpauth: otpauthUrl(secret, username) },
@@ -72,6 +75,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: false, error: '未知操作' }, { status: 400 });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message || '操作失败' }, { status: 500 });
+    return handleApiError(error);
   }
 }

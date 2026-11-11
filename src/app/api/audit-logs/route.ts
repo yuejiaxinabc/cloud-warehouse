@@ -4,9 +4,12 @@ import { authOptions } from '@/lib/auth';
 import { prisma } from "@/lib/prisma";
 import { successResponse, parsePagination } from "@/lib/errors";
 import { handleApiError } from "@/lib/errors";
+import { requirePermission } from '@/lib/auth-guard';
 
 export async function GET(req: NextRequest) {
   try {
+    // P1-8：审计日志只对管理面/审计角色开放，普通账号不再能翻别人做了什么
+    await requirePermission('audit:view');
     const url = new URL(req.url);
     const { page, pageSize, skip } = parsePagination(url.searchParams);
     const userId = url.searchParams.get("userId") ? Number(url.searchParams.get("userId")) : undefined;

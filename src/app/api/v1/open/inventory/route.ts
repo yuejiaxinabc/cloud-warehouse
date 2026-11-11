@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { requireOpenApi } from '@/lib/open-api-auth';
+import { requireOpenApiAccess } from '@/lib/auth-guard';
+import { handleApiError } from '@/lib/errors';
 
 /** GET /api/v1/open/inventory?warehouseId=1&page=1&pageSize=200 —— 对外库存快照 */
 export async function GET(req: NextRequest) {
-  const auth = await requireOpenApi(req);
-  if (!auth.ok) return NextResponse.json({ success: false, error: auth.error || 'Token 无效' }, { status: 401 });
-
   try {
+    // P1-4：鉴权移进 try，表缺失 → 503 可读 JSON
+    const guard = await requireOpenApiAccess(req);
+    if (!guard.ok) return NextResponse.json(guard.body, { status: guard.status });
+
     const sp = req.nextUrl.searchParams;
     const warehouseId = sp.get('warehouseId');
     const page = Math.max(1, parseInt(sp.get('page') || '1', 10));
@@ -46,6 +48,6 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message || '查询失败' }, { status: 500 });
+    return handleApiError(error);
   }
 }

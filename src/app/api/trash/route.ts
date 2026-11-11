@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
 import { requireAuth } from '@/lib/auth-guard';
 import { writeLog, getClientIp } from '@/lib/log';
+import { safeErrorMessage } from '@/lib/errors';
 
 /**
  * 回收站（v1.2.0）
@@ -42,7 +43,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json(serializeBigInt({ success: true, data: items }));
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message || '回收站查询失败' }, { status: 500 });
+    return NextResponse.json({ success: false, error: safeErrorMessage(error) || '回收站查询失败' }, { status: 500 });
   }
 }
 
@@ -68,7 +69,7 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json(serializeBigInt({ success: true, data: row }));
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message || '恢复失败' }, { status: 500 });
+    return NextResponse.json({ success: false, error: safeErrorMessage(error) || '恢复失败' }, { status: 500 });
   }
 }
 

@@ -82,7 +82,7 @@ export default function BomPage() {
   return (
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-      <h4 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: "#0F172A", whiteSpace: "nowrap" }}>BOM管理</h4>
+      <h4 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: "#0F172A", whiteSpace: "nowrap" }}>BOM 清单</h4>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => router.push('/bom/new')}>新建BOM</Button>
       </div>
       <SearchBar fields={filterFields} onSearch={(v) => { setSearchValues(v); setCurrent(1); fetchData(1, pageSize, v); }} />

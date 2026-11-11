@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   App, Button, Card, Col, Empty, Row, Select, Space, Statistic, Table, Tag, Tooltip, Typography,
 } from 'antd';
+import dayjs from 'dayjs';
 import {
   AlertOutlined, FireOutlined, ReloadOutlined, ShoppingCartOutlined, ThunderboltOutlined, WarningOutlined,
 } from '@ant-design/icons';
@@ -15,6 +16,17 @@ const { Text } = Typography;
 async function readJson(res: Response) {
   const raw = await res.text();
   try { return raw ? JSON.parse(raw) : null; } catch { return null; }
+}
+
+/**
+ * F11 修复：时间统一格式化为 YYYY/MM/DD HH:mm:ss。
+ * 原来用的 toLocaleString() 跟随浏览器语言，英文环境下会输出 "10/30/2026, 11:36:41 AM"，
+ * 与列表页的 "2026/10/30 11:33:32" 不一致；dayjs 已在依赖里，无需新增包。
+ */
+function formatDateTime(value?: string | null) {
+  if (!value) return "-";
+  const d = dayjs(value);
+  return d.isValid() ? d.format("YYYY/MM/DD HH:mm:ss") : "-";
 }
 
 export default function AlertsPage() {
@@ -117,6 +129,8 @@ export default function AlertsPage() {
       <span>{r.productName}<Text type="secondary" style={{ fontSize: 12, marginLeft: 6 }}>{r.productCode}</Text></span>
     ) },
     { title: '数量', dataIndex: 'currentStock', key: 'currentStock', width: 80, align: 'right' as const },
+    // F11：统一展示 YYYY/MM/DD HH:mm:ss，与列表页时间格式保持一致
+    { title: '时间', dataIndex: 'createdAt', key: 'createdAt', width: 170, render: (v: string) => formatDateTime(v) },
   ];
 
   const suggestColumns = [

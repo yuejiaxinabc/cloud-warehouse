@@ -1,9 +1,12 @@
 "use client";
+import { fetchAllPages } from '@/lib/fetch-all-pages';
 
 import React, { useState, useEffect } from "react";
 import { Card, Table, Button, Space, Input, Select, Tag, Modal, Form, message, Typography, Row, Col, DatePicker, InputNumber, Popconfirm } from "antd";
 import { PlusOutlined, SearchOutlined, EyeOutlined, DeleteOutlined, CheckCircleOutlined, ScanOutlined } from "@ant-design/icons";
 import { useRouter } from "next/navigation";
+// L4：状态展示统一走 StatusBadge（中文映射唯一出口）
+import { OrderStatusBadge } from "@/components/ui/StatusBadge";
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -59,9 +62,8 @@ export default function StocktakePage() {
 
   const loadProducts = async () => {
     try {
-      const res = await fetch("/api/products?pageSize=1000");
-      const data = await res.json();
-      if (data.success) setProducts(data.data?.items || []);
+      const items = await fetchAllPages("/api/products");
+      setProducts(items);
     } catch (e) { console.error(e); }
   };
 
@@ -101,16 +103,8 @@ export default function StocktakePage() {
     } catch (e) { message.error("删除失败"); }
   };
 
-  const getStatusTag = (status: string) => {
-    const statusMap: Record<string, { color: string; text: string }> = {
-      DRAFT: { color: "default", text: "草稿" },
-      IN_PROGRESS: { color: "processing", text: "进行中" },
-      COMPLETED: { color: "success", text: "已完成" },
-      CANCELLED: { color: "error", text: "已取消" },
-    };
-    const s = statusMap[status] || { color: "default", text: status };
-    return <Tag color={s.color}>{s.text}</Tag>;
-  };
+  // L4：状态文案统一由 StatusBadge 出中文（旧写法缺项时会直出 IN_PROGRESS 之类的英文码）
+  const getStatusTag = (status: string) => <OrderStatusBadge status={status} />;
 
   const columns = [
     { title: "盘点单号", dataIndex: "orderNo", key: "orderNo", width: isMobile ? 130 : 180, render: (t: string) => <span style={{ fontFamily: "monospace", fontWeight: 500, color: "#1976D2", fontSize: isMobile ? 12 : 14 }}>{t}</span> },

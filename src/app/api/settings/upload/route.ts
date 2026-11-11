@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { getSessionChecked } from '@/lib/auth-guard';
 
 const CATEGORY = 'upload';
 
@@ -51,7 +51,7 @@ async function saveUploadConfig(data: Record<string, string>) {
 
 export async function GET() {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await getSessionChecked();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -64,13 +64,14 @@ export async function GET() {
     return NextResponse.json({ success: true, data: config });
   } catch (e: any) {
     console.error('GET /api/settings/upload error:', e);
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    // M3：上传配置里含 accessKey/secretKey 等敏感字段，绝不回显异常原文
+    return NextResponse.json({ error: '读取上传配置失败' }, { status: 500 });
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await getSessionChecked();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -96,6 +97,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, message: '上传配置已保存' });
   } catch (e: any) {
     console.error('POST /api/settings/upload error:', e);
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return NextResponse.json({ error: '保存上传配置失败' }, { status: 500 });
   }
 }

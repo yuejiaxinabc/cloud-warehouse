@@ -1,14 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { requirePermission } from '@/lib/auth-guard';
+import { handleApiError } from '@/lib/errors';
 
 export async function GET(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ success: false, error: '请先登录' }, { status: 401 });
-    }
+    // P1-8：原来只判「已登录」，任意账号可读全站操作日志（含 IP）；改为审计权限
+    await requirePermission('audit:view');
 
     const { searchParams } = new URL(req.url);
     const entityType = searchParams.get('entityType') || '';
@@ -54,6 +52,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: true, data: { items: formatted, total } });
   } catch (e: any) {
     console.error('GET /api/operation-logs error:', e);
-    return NextResponse.json({ success: false, error: e.message }, { status: 500 });
+    return handleApiError(e);
   }
 }

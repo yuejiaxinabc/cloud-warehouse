@@ -1,3 +1,4 @@
+import { businessAccess } from '@/app/api/warehouse/access';
 import { getServerSession } from 'next-auth';
 import { NextRequest, NextResponse } from 'next/server';
 import { authOptions } from '@/lib/auth';
@@ -5,20 +6,22 @@ import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
 import { writeLog, getClientIp } from '@/lib/log';
 import { requireAuth } from '@/lib/auth-guard';
+import { handleApiError } from '@/lib/errors';
 
 export async function GET() {
   try {
+    await businessAccess('product:view');
     const units = await prisma.unit.findMany({ where: { deletedAt: null }, orderBy: { id: 'asc' } });
     return NextResponse.json({ success: true, data: serializeBigInt(units) });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
   try {
-    const uid = (auth as any)?.session?.user?.id;
+    const { user } = await businessAccess('product:edit');
+    const uid = user.id;
     const body = await req.json();
     const { name, code } = body;
     if (!name || !code) {
@@ -43,12 +46,13 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ success: true, data: serializeBigInt(unit) });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }
 
 export async function DELETE(req: NextRequest) {
   try {
+    const { user } = await businessAccess('product:delete');
     const { searchParams } = new URL(req.url);
     const id = searchParams.get('id');
     if (!id) return NextResponse.json({ success: false, error: '缺少ID' }, { status: 400 });
@@ -63,6 +67,7 @@ export async function DELETE(req: NextRequest) {
     await writeLog({
       module: 'unit',
       action: 'delete',
+      userId: user.id,
       ip: getClientIp(),
       content: `删除计量单位 ${deleted.name}（${deleted.code}）`,
       refType: 'unit',
@@ -70,6 +75,6 @@ export async function DELETE(req: NextRequest) {
     });
     return NextResponse.json({ success: true });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }

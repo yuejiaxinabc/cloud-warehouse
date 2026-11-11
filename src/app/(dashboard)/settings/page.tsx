@@ -8,10 +8,14 @@ const { Title, Text } = Typography;
 import {
   UserOutlined, LockOutlined, MailOutlined, TeamOutlined,
   SettingOutlined, FileTextOutlined, EyeOutlined,
-  EditOutlined, DeleteOutlined, KeyOutlined, PlusOutlined, SendOutlined
+  EditOutlined, DeleteOutlined, KeyOutlined, PlusOutlined, SendOutlined,
+  CloudDownloadOutlined
 } from '@ant-design/icons';
 import { useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
 import MailSettings from '@/components/settings/MailSettings';
+import UpdateTab from '@/components/settings/UpdateTab';
+import { settingsRequest, settingsList } from '@/components/settings/request';
 
 const { TabPane } = Tabs;
 
@@ -19,13 +23,35 @@ const { TabPane } = Tabs;
 interface UserInfo {
   id: number; username: string; realName: string; phone: string;
   email: string; status: number; emailVerified: boolean;
-  roles: string[];
+  roles: { id: number; name: string; code: string }[];
+  roleIds?: number[];
+  orgId?: number | null;
 }
 interface RoleInfo {
   id: number; name: string; code: string; remark: string;
   status: number; userCount: number;
+  // v1.2.3 数据权限
+  dataScope?: string;
+  dataScopeOrgIds?: number[];
+  permissionIds?: number[];
   rolePermissions: { permission: { id: number; name: string; code: string } }[];
 }
+
+/** v1.2.3 数据范围档位（宽 → 窄） */
+const DATA_SCOPE_OPTIONS = [
+  { label: '全部数据', value: 'ALL' },
+  { label: '本部门及下级', value: 'DEPT_AND_CHILD' },
+  { label: '本部门', value: 'DEPT' },
+  { label: '指定组织', value: 'CUSTOM' },
+  { label: '仅本人经手', value: 'SELF' },
+];
+const DATA_SCOPE_LABEL: Record<string, { text: string; color: string }> = {
+  ALL: { text: '全部数据', color: 'blue' },
+  DEPT_AND_CHILD: { text: '本部门及下级', color: 'cyan' },
+  DEPT: { text: '本部门', color: 'green' },
+  CUSTOM: { text: '指定组织', color: 'purple' },
+  SELF: { text: '仅本人', color: 'orange' },
+};
 interface SmtpConfig {
   host: string; port: number; user: string; pass: string;
   from: string; secure: boolean;
@@ -49,20 +75,16 @@ interface LogEntry {
 }
 
 // ========== Helper: fetch with auth ==========
-async function apiFetch(url: string, options?: RequestInit) {
-  const res = await fetch(url, { ...options, credentials: 'include' });
-  const text = await res.text();
-  let data: any;
-  try { data = JSON.parse(text); } catch { throw new Error(text || "服务器无响应"); }
-  if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-  return data;
-}
+const apiFetch = settingsRequest;
 
 // ========== Tab: 个人资料 ==========
 const ProfileTab: React.FC = () => {
   const [form] = Form.useForm();
   const [isMobile, setIsMobile] = useState(false);
   const [loading, setLoading] = useState(false);
+  const router = useRouter();
+  // v1.2.1（P1-6）：保存成功后要让右上角会话里的姓名/邮箱同步更新
+  const { update: updateSession } = useSession();
   
   
   useEffect(() => {
@@ -88,8 +110,15 @@ const ProfileTab: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(values),
       });
-      if (d.success) message.success('保存成功');
-    } catch (e: any) { message.error(e.message); }
+      if (d.success) {
+        message.success('保存成功');
+        // 回填服务端实际值（后端可能做过 trim/规整）
+        if (d.data) form.setFieldsValue(d.data);
+        // v1.2.1（P1-6）：刷新 session 与页面数据，否则顶部仍显示旧姓名
+        try { await updateSession?.(); } catch { /* session 刷新失败不影响保存结果 */ }
+        router.refresh();
+      }
+    } catch (e: any) { message.error(e.message || '保存失败'); }
     finally { setLoading(false); }
   };
 
@@ -144,6 +173,9 @@ const PasswordTab: React.FC = () => {
 
 // ========== Tab: 用户管理（管理员） ==========
 const UsersTab: React.FC = () => {
+  // v1.2.3：用户归属组织（数据权限 DEPT / DEPT_AND_CHILD 的前提）
+  const [orgOptions, setOrgOptions] = useState<{label: string; value: number}[]>([]);
+  const [optionsReady, setOptionsReady] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [roles, setRoles] = useState<RoleInfo[]>([]);
@@ -163,13 +195,15 @@ const UsersTab: React.FC = () => {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [ud, rd] = await Promise.all([
-        apiFetch('/api/users'),
-        apiFetch('/api/roles'),
+      setOptionsReady(false);
+      const [users, roles, orgs] = await Promise.all([
+        settingsList('/api/users'), settingsList('/api/roles'), settingsList('/api/organizations'),
       ]);
-      if (ud.success) setUsers(ud.data?.list || ud.data || []);
-      if (rd.success) setRoles(rd.data?.items || rd.data?.list || rd.data || []);
-    } catch {}
+      setUsers(users.map(u => ({ ...u, roleIds: u.roleIds || (u.roles || []).map((r: any) => Number(r.id)) })));
+      setRoles(roles);
+      setOrgOptions(orgs.map(o => ({label: o.name, value: Number(o.id)})));
+      setOptionsReady(true);
+    } catch (e: any) { message.error(e.message || '用户配置加载失败'); }
     finally { setLoading(false); }
   }, []);
 
@@ -181,7 +215,11 @@ const UsersTab: React.FC = () => {
       setLoading(true);
       const method = editing ? 'PUT' : 'POST';
       const url = editing ? `/api/users?id=${editing.id}` : '/api/users';
-      const body = values;
+      if (!optionsReady) throw new Error("角色和组织尚未加载，请刷新列表重试");
+      const body = { ...values, roleIds: values.roleIds || [], orgId: values.orgId ?? null };
+      // Lists mask contact fields: leaving them blank preserves the original value.
+      if (editing && !values.phone) delete body.phone;
+      if (editing && !values.email) delete body.email;
       const d = await apiFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
@@ -200,28 +238,32 @@ const UsersTab: React.FC = () => {
   };
 
   
-  // 全局重置令牌
-  const [tokenModal, setTokenModal] = useState<{ open: boolean; token: string }>({ open: false, token: "" });
-
-  const handleSetGlobalToken = async (customToken?: string) => {
+  const [tokenModal, setTokenModal] = useState({ open: false, token: "", expiresAt: "", username: "" });
+  const [issueOpen, setIssueOpen] = useState(false);
+  const [tokenBusy, setTokenBusy] = useState(false);
+  const [tokenForm] = Form.useForm();
+  const handleSetGlobalToken = async () => {
     try {
-      const body: any = { action: "set-token" };
-      if (customToken && customToken.trim()) {
-        if (customToken.trim().length < 16) { message.warning("令牌不能少于16位"); return; }
-        body.token = customToken.trim();
-      }
+      const values = await tokenForm.validateFields();
+      setTokenBusy(true);
       const d = await apiFetch("/api/auth/admin-reset", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "set-token", ...values }),
       });
-      if (d.success) {
-        setTokenModal({ open: true, token: d.data.token });
-        message.success("全局重置令牌已设置");
-      } else {
-        message.error(d.error || "设置失败");
-      }
-    } catch (e: any) { message.error(e.message); }
+      if (!d.data?.token || !d.data?.expiresAt || !d.data?.username) throw new Error("令牌响应不完整，请联系管理员");
+      setTokenModal({open: true, token: d.data.token, expiresAt: d.data.expiresAt, username: d.data.username});
+      setIssueOpen(false);
+      tokenForm.resetFields();
+      message.success("一次性重置令牌已签发");
+    } catch (e: any) { if (!e.errorFields) message.error(e.message || "签发失败，请重试"); }
+    finally { setTokenBusy(false); }
+  };
+  const clearResetToken = async () => {
+    try {
+      await apiFetch("/api/auth/admin-reset", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({action: "clear-token"})});
+      setTokenModal({open: false, token: "", expiresAt: "", username: ""});
+      message.success("重置令牌已撤销");
+    } catch (e: any) { message.error(e.message || "撤销失败"); }
   };
 
   const columns = [
@@ -237,12 +279,12 @@ const UsersTab: React.FC = () => {
       render: (v: number) => <Tag color={v === 1 ? 'green' : 'red'}>{v === 1 ? '启用' : '禁用'}</Tag>,
     },
     {
-      title: '操作', width: 100, fixed: 'right' as const,
+      title: '操作', width: 150, fixed: 'right' as const,
       render: (_: any, record: UserInfo) => (
         <Space size={4}>
-          <Button size="small" icon={<EditOutlined />} onClick={() => { setEditing(record); form.setFieldsValue(record); setModalOpen(true); }} />
+          <Button type="link" size="small" disabled={!optionsReady} aria-label="编辑用户" icon={<EditOutlined />} onClick={() => { setEditing(record); form.resetFields(); form.setFieldsValue({ ...record, phone: "", email: "" }); setModalOpen(true); }}>编辑</Button>
           <Popconfirm title="确定删除？" onConfirm={() => handleDelete(record.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
+            <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
           </Popconfirm>
         </Space>
       ),
@@ -252,73 +294,47 @@ const UsersTab: React.FC = () => {
   return (
     <Card>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); setModalOpen(true); }}>
+        <Button disabled={!optionsReady} type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); setModalOpen(true); }}>
           新建用户
         </Button>
-        <Button icon={<KeyOutlined />} onClick={() => {
-          Modal.confirm({
-            title: "设置全局重置令牌",
-            content: (
-              <div>
-                <p style={{ marginBottom: 8 }}>输入自定义令牌（至少16位），或留空自动生成：</p>
-                <Input id="globalTokenInput" placeholder="留空则自动生成32位令牌" />
-              </div>
-            ),
-            onOk: () => {
-              const input = document.getElementById("globalTokenInput") as HTMLInputElement;
-              handleSetGlobalToken(input?.value || "");
-            },
-          });
-        }}>
-          设置重置令牌
-        </Button>
+        <Button icon={<KeyOutlined />} onClick={() => {tokenForm.resetFields(); setIssueOpen(true);}}>签发重置令牌</Button>
+        <Popconfirm title="撤销当前签发的重置令牌？" onConfirm={clearResetToken}><Button danger>撤销重置令牌</Button></Popconfirm>
       </div>
       <Table columns={columns} dataSource={users} loading={loading} rowKey="id" size="small" scroll={{ x: isMobile ? 800 : undefined }}
             pagination={{ pageSize: 20 }} />
-      <Modal title={editing ? '编辑用户' : '新建用户'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} destroyOnClose>
+      <Modal title={editing ? '编辑用户' : '新建用户'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} confirmLoading={loading} okButtonProps={{disabled: !optionsReady}} destroyOnClose>
         <Form form={form} layout="vertical">
           <Form.Item label="用户名" name="username" rules={[{ required: true }]}><Input disabled={!!editing} /></Form.Item>
           {!editing && <Form.Item label="密码" name="password" rules={[{ required: true, min: 8 }]}><Input.Password /></Form.Item>}
           <Form.Item label="姓名" name="realName" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item label="手机号" name="phone"><Input /></Form.Item>
-          <Form.Item label="邮箱" name="email"><Input /></Form.Item>
+          <Form.Item label="手机号" name="phone" extra={editing ? "留空保留原手机号" : undefined}><Input maxLength={20} /></Form.Item>
+          <Form.Item label="邮箱" name="email" extra={editing ? "留空保留原邮箱" : undefined} rules={[{type:"email", message:"请输入有效邮箱"},{max:100}]}><Input maxLength={100} /></Form.Item>
+          <Form.Item label="分配角色" name="roleIds" initialValue={[]} extra="可选择多个角色；清空表示移除全部角色">
+            <Select mode="multiple" allowClear options={roles.map(r => ({label: r.name + "（" + r.code + "）", value: Number(r.id)}))} />
+          </Form.Item>
+          <Form.Item label="归属组织" name="orgId" extra="数据权限的「本部门 / 本部门及以下」按此生效">
+            <Select allowClear placeholder="未划分" options={orgOptions} />
+          </Form.Item>
           <Form.Item label="状态" name="status" initialValue={1}>
             <Select options={[{ label: '启用', value: 1 }, { label: '禁用', value: 0 }]} />
           </Form.Item>
         </Form>
       </Modal>
-      {/* 全局令牌弹窗 */}
-      <Modal
-        title="全局重置令牌"
-        open={tokenModal.open}
-        onCancel={() => setTokenModal({ open: false, token: "" })}
-        footer={
-          <Space>
-            <Button onClick={() => { navigator.clipboard.writeText(tokenModal.token); message.success("已复制"); }}>复制令牌</Button>
-            <Button type="primary" onClick={() => setTokenModal({ open: false, token: "" })}>关闭</Button>
-          </Space>
-        }
-      >
-        <div style={{ textAlign: "center", padding: "16px 0" }}>
-          <p style={{ fontSize: 14, color: "#64748B", marginBottom: 16 }}>
-            系统全局重置令牌（所有用户共用）：
-          </p>
-          <div style={{
-            fontSize: 16, fontFamily: "monospace", fontWeight: 700,
-            color: "#2563EB", letterSpacing: "0.08em",
-            padding: "14px 20px", background: "#EFF6FF",
-            borderRadius: 10, border: "1px solid #BFDBFE",
-            wordBreak: "break-all", userSelect: "all",
-          }}>
-            {tokenModal.token}
-          </div>
-          <p style={{ fontSize: 13, color: "#94A3B8", marginTop: 12 }}>
-            此令牌长期有效，直到管理员重新设置或清除
-          </p>
-          <p style={{ fontSize: 13, color: "#DC2626", marginTop: 4 }}>
-            请妥善保管，告知需要重置密码的用户
-          </p>
-        </div>
+      <Modal title="签发一次性重置令牌" open={issueOpen} onOk={handleSetGlobalToken} confirmLoading={tokenBusy} onCancel={() => setIssueOpen(false)}>
+        <Alert type="info" showIcon message="短时有效，成功重置一次后失效；重新签发将替换当前令牌。" />
+        <Form form={tokenForm} layout="vertical" initialValues={{ttlHours: 1}}>
+          <Form.Item name="username" label="目标账号" rules={[{required: true, whitespace: true}]}><Input maxLength={100} /></Form.Item>
+          <Form.Item name="ttlHours" label="有效期（小时）" rules={[{required:true}]}><InputNumber min={1} max={24} /></Form.Item>
+        </Form>
+      </Modal>
+      <Modal title="一次性重置令牌" open={tokenModal.open} onCancel={() => setTokenModal({open:false,token:"",expiresAt:"",username:""})} footer={<Button onClick={async () => {
+        try { await navigator.clipboard.writeText(tokenModal.token); message.success("已复制"); }
+        catch { message.error("复制失败，请手动选择令牌复制"); }
+      }}>复制令牌</Button>}>
+        <p>目标账号：{tokenModal.username}</p>
+        <p style={{wordBreak:"break-all",fontFamily:"monospace",userSelect:"all"}}>{tokenModal.token}</p>
+        <p>到期时间：{tokenModal.expiresAt ? new Date(tokenModal.expiresAt).toLocaleString('zh-CN') : '—'}</p>
+        <p>仅用于上述账号，成功重置一次后立即失效。只向经核实的目标用户传递；不再使用时请撤销。</p>
       </Modal>
     </Card>
   );
@@ -340,12 +356,44 @@ const RolesTab: React.FC = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<RoleInfo | null>(null);
   const [form] = Form.useForm();
+  const [permissionOptions, setPermissionOptions] = useState<{label:string; value:number}[]>([]);
+  const [permissionsReady, setPermissionsReady] = useState(false);
+  // v1.2.3：数据范围选「指定组织」时需要组织树
+  const [orgOptions, setOrgOptions] = useState<{ label: string; value: number }[]>([]);
+  // v1.2.3：直接用 Form 的值驱动「指定组织」显隐，避免再维护一份 state
+  const scopeMode: string = ((Form.useWatch('dataScope', form) as string) || 'ALL');
+
+  useEffect(() => {
+    apiFetch('/api/organizations')
+      .then((d) => {
+        const list = d?.data?.list || [];
+        setOrgOptions(list.map((o: any) => ({ label: o.name, value: o.id })));
+      })
+      .catch((e: Error) => message.error(e.message));
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const d = await apiFetch('/api/roles');
-      if (d.success) setRoles(d.data?.items || d.data?.list || d.data || []);
+      setPermissionsReady(false);
+      const d = await apiFetch('/api/roles?pageSize=100');
+      if (!Array.isArray(d.data?.permissionOptions)) throw new Error('权限目录加载失败，请确认服务端版本');
+      setPermissionOptions(d.data.permissionOptions.map((p: any) => ({label: p.name + '（' + p.code + '）', value: Number(p.id)})));
+      const allRoles = await settingsList('/api/roles');
+      setPermissionsReady(true);
+      if (d.success) {
+        const list = allRoles;
+        // v1.2.3：dataScopeOrgIds 在库里是逗号串，编辑表单里要用多选数组
+        setRoles(list.map((r: any) => ({
+          ...r,
+          remark: r.remark ?? r.remarks ?? r.description ?? "",
+          permissionIds: r.permissionIds || (r.permissions || []).map((p: any) => Number(p.id)),
+          dataScopeOrgIds: String(r.dataScopeOrgIds || '')
+            .split(',')
+            .map((x: string) => Number(x))
+            .filter((n: number) => Number.isFinite(n) && n > 0),
+        })));
+      }
     } catch (e: any) { message.error(e.message); }
     finally { setLoading(false); }
   }, []);
@@ -357,8 +405,16 @@ const RolesTab: React.FC = () => {
       const values = await form.validateFields();
       setLoading(true);
       const method = editing ? 'PUT' : 'POST';
-      const body = editing ? { ...values, id: editing.id } : values;
-      const d = await apiFetch('/api/roles', {
+      // v1.2.3：数据范围随角色一起提交，CUSTOM 才传组织 id 数组
+      if (!permissionsReady) throw new Error("权限目录尚未加载，请重试");
+      const payload: any = { code: values.code, name: values.name, status: values.status, dataScope: values.dataScope, dataScopeOrgIds: values.dataScopeOrgIds, remark: values.remark || "", description: values.remark || "", permissionIds: values.permissionIds || [] };
+      if (payload.dataScope === 'CUSTOM') {
+        payload.dataScopeOrgIds = payload.dataScopeOrgIds || [];
+      } else {
+        delete payload.dataScopeOrgIds;
+      }
+      const body = editing ? { ...payload, id: editing.id } : payload;
+      const d = await apiFetch(editing ? `/api/roles?id=${editing.id}` : '/api/roles', {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -380,6 +436,13 @@ const RolesTab: React.FC = () => {
     { title: '角色名', dataIndex: 'name', width: isMobile ? 80 : undefined },
     ...(!isMobile ? [
       { title: '编码', dataIndex: 'code', width: 120 },
+      {
+        title: '数据范围', dataIndex: 'dataScope', width: 130,
+        render: (v: string) => {
+          const meta = DATA_SCOPE_LABEL[v || 'ALL'] || DATA_SCOPE_LABEL.ALL;
+          return <Tag color={meta.color}>{meta.text}</Tag>;
+        },
+      },
       { title: '备注', dataIndex: 'remark', ellipsis: true },
       { title: '成员数', dataIndex: 'userCount', width: 80, render: (v: number) => <Tag>{v || 0}</Tag> },
     ] : []),
@@ -391,9 +454,9 @@ const RolesTab: React.FC = () => {
       title: '操作', width: isMobile ? 80 : 150, fixed: 'right' as const,
       render: (_: any, record: RoleInfo) => (
         <Space size={4}>
-          <Button size="small" icon={<EditOutlined />} onClick={() => { setEditing(record); form.setFieldsValue(record); setModalOpen(true); }} />
+          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => { setEditing(record); form.resetFields(); form.setFieldsValue(record); setModalOpen(true); }}>编辑</Button>
           <Popconfirm title="确定删除？" onConfirm={() => handleDelete(record.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
+            <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
           </Popconfirm>
         </Space>
       ),
@@ -408,12 +471,28 @@ const RolesTab: React.FC = () => {
       <Table columns={columns} dataSource={roles} loading={loading} rowKey="id" size="small"
         scroll={{ x: isMobile ? 400 : undefined }}
         pagination={{ pageSize: 20, size: isMobile ? 'small' : 'default' }} />
-      <Modal title={editing ? '编辑角色' : '新建角色'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} destroyOnClose
+      <Modal title={editing ? '编辑角色' : '新建角色'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} destroyOnClose confirmLoading={loading} okButtonProps={{disabled: !permissionsReady}}
         width={isMobile ? '95%' : 520}>
         <Form form={form} layout="vertical">
           <Form.Item label="角色名" name="name" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item label="编码" name="code" rules={[{ required: true }]}><Input disabled={!!editing} /></Form.Item>
           <Form.Item label="备注" name="remark"><Input.TextArea rows={isMobile ? 2 : 3} /></Form.Item>
+          <Form.Item label="操作权限" name="permissionIds" initialValue={[]} extra="仅授予所选操作权限；清空表示不授予任何操作权限">
+            <Select mode="multiple" allowClear showSearch optionFilterProp="label" disabled={!permissionsReady} options={permissionOptions} />
+          </Form.Item>
+          <Form.Item
+            label="数据范围"
+            name="dataScope"
+            initialValue="ALL"
+            extra="决定该角色能看到哪些仓库与单据；一人多角色时取最宽的一档"
+          >
+            <Select options={DATA_SCOPE_OPTIONS} />
+          </Form.Item>
+          {scopeMode === 'CUSTOM' && (
+            <Form.Item label="可见组织" name="dataScopeOrgIds" extra="只统计这些组织下的仓库">
+              <Select mode="multiple" allowClear placeholder="选择组织" options={orgOptions} />
+            </Form.Item>
+          )}
           <Form.Item label="状态" name="status" initialValue={1}>
             <Select options={[{ label: '启用', value: 1 }, { label: '禁用', value: 0 }]} />
           </Form.Item>
@@ -432,7 +511,7 @@ const SystemTab: React.FC = () => {
     setLoading(true);
     apiFetch('/api/settings/system')
       .then(d => { if (d.success) form.setFieldsValue(d.data); })
-      .catch(() => {})
+      .catch((e: Error) => message.error(e.message))
       .finally(() => setLoading(false));
   }, []);
 
@@ -484,7 +563,7 @@ const LogsTab: React.FC = () => {
       if (filters.keyword) params.set('keyword', filters.keyword);
       const d = await apiFetch(`/api/operation-logs?${params}`);
       if (d.success) { setLogs(d.data?.items || d.data || []); setTotal(d.data?.total || 0); }
-    } catch {}
+    } catch (e: any) { message.error(e.message || '加载失败，请重试'); }
     finally { setLoading(false); }
   }, [filters]);
 
@@ -538,10 +617,25 @@ const LogsTab: React.FC = () => {
 };
 
 // ========== Main: Settings Page ==========
+/** 允许用 /settings?tab=update 直达某个页签（侧栏「发现新版本」就靠这个） */
+function readDefaultTab(isAdmin: boolean): string {
+  if (typeof window === 'undefined') return isAdmin ? 'system' : 'profile';
+  const tab = new URLSearchParams(window.location.search).get('tab');
+  const allowed = ['profile', 'password', 'users', 'roles', 'system', 'mail', 'update'];
+  if (tab && allowed.includes(tab)) {
+    if (!isAdmin && ['users', 'roles', 'system', 'mail', 'update'].includes(tab)) return 'profile';
+    return tab;
+  }
+  return isAdmin ? 'system' : 'profile';
+}
+
 const SettingsPage: React.FC = () => {
   const router = useRouter();
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [defaultTab, setDefaultTab] = useState<string>('profile');
+
+  useEffect(() => { setDefaultTab(readDefaultTab(isAdmin)); }, [isAdmin]);
 
   useEffect(() => {
     // Check if user is admin
@@ -555,19 +649,23 @@ const SettingsPage: React.FC = () => {
   if (loading) return <div style={{ padding: 50, textAlign: 'center' }}><Spin size="large" /></div>;
 
   const items = [
-    { key: 'profile', label: '👤 个人资料', children: <ProfileTab /> },
-    { key: 'password', label: '🔑 修改密码', children: <PasswordTab /> },
+    { key: 'profile', label: <span><UserOutlined /> 个人资料</span>, children: <ProfileTab /> },
+    { key: 'password', label: <span><KeyOutlined /> 修改密码</span>, children: <PasswordTab /> },
     ...(isAdmin ? [
-      { key: 'users', label: '👥 用户管理', children: <UsersTab /> },
-      { key: 'roles', label: '🎭 角色管理', children: <RolesTab /> },
+      { key: 'users', label: <span><TeamOutlined /> 用户管理</span>, children: <UsersTab /> },
+      { key: 'roles', label: <span><SettingOutlined /> 角色管理</span>, children: <RolesTab /> },
       { key: 'system', label: <span><SettingOutlined /> 系统设置</span>, children: <SystemTab /> },
       { key: 'mail', label: <span><MailOutlined /> 邮件与订阅</span>, children: <MailSettings /> },
+      { key: 'update', label: <span><CloudDownloadOutlined /> 检查更新</span>, children: <UpdateTab /> },
     ] : []),
   ];
 
   return (
     <div style={{ padding: 24 }}>
-      <Tabs items={items} defaultActiveKey="profile" />
+      <h4 style={{ margin: '0 0 16px', fontSize: 18, fontWeight: 600, color: '#0F172A', whiteSpace: 'nowrap' }}>设置</h4>
+      {/* 默认打开系统设置（管理员）；非管理员没有系统设置页，默认打开个人资料。
+          支持 /settings?tab=update —— 侧栏「发现新版本」的提示点进来直接落在检查更新。 */}
+      <Tabs items={items} defaultActiveKey={defaultTab} />
     </div>
   );
 };

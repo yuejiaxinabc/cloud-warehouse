@@ -1,78 +1,40 @@
 import { NextRequest, NextResponse } from "next/server";
 import { issueCaptcha, consumeCaptcha } from "@/lib/captcha-store";
-import { glyphPath } from "@/lib/captcha-font";
+import { renderCaptchaPng } from "@/lib/captcha-render";
 
 /**
- * 验证码（FIX-2026-1012）
+ * 验证码（M6 修复）
  *
- * 原先用 <text> 节点画字符，答案明文躺在响应里，一条正则就能读出来
- * （实测解析出 88bJ 并成功登录）。现在每个字符用 5x7 点阵画成 <path>，
- * 响应里没有可提取的文本，破解需要做抗旋转/抗噪的图像识别。
+ * v1.2.0 返回 SVG，字符被画成像素方块 path —— 但每个字符的 path 数据是固定的，
+ * 攻击者把 d 前缀与字符建表即可 100% 还原（报告里 8/8 全对）。
+ *
+ * 现在只返回 PNG 光栅图（服务端渲染、逐像素抖动、干扰线、噪点），
+ * 响应里既没有文本也没有可查表的矢量结构。
+ * 票据仍然一次性：登录时由 authorize() 消费，独立校验接口只校验不消费。
  */
 
-function rand(min: number, max: number): number {
-  return min + Math.random() * (max - min);
-}
-
-function genSvg(text: string): string {
-  const w = 132, h = 46;
-  const colors = ["#1677FF", "#4096FF", "#1D4ED8", "#2563EB"];
-
-  const chars = text.split("").map((ch, i) => {
-    const d = glyphPath(ch);
-    if (!d) return "";
-    const x = 12 + i * 28 + rand(-3, 3);
-    const y = 14 + rand(-4, 4);
-    const scale = rand(2.5, 3.1);
-    const rot = rand(-14, 14);
-    const skew = rand(-6, 6);
-    const fill = colors[i % colors.length];
-    // 先斜切再旋转再缩放，落在 (x,y)
-    const t = `translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${rot.toFixed(1)}) skewX(${skew.toFixed(1)}) scale(${scale.toFixed(2)})`;
-    // 描边 + 填充一起用，边缘更糊，干扰识别
-    return `<path d="${d}" fill="${fill}" stroke="${fill}" stroke-width="0.18" transform="${t}"/>`;
-  }).join("");
-
-  const noise = Array.from({ length: 5 }, () => {
-    const x1 = rand(0, w), y1 = rand(0, h), x2 = rand(0, w), y2 = rand(0, h);
-    const xm = rand(0, w), ym = rand(0, h);
-    return `<path d="M${x1.toFixed(0)} ${y1.toFixed(0)} Q${xm.toFixed(0)} ${ym.toFixed(0)} ${x2.toFixed(0)} ${y2.toFixed(0)}" stroke="rgba(120,160,220,0.45)" fill="none" stroke-width="1.2"/>`;
-  }).join("");
-
-  const dots = Array.from({ length: 24 }, () => {
-    const cx = rand(0, w).toFixed(0), cy = rand(0, h).toFixed(0);
-    return `<circle cx="${cx}" cy="${cy}" r="1.1" fill="rgba(130,160,215,0.5)"/>`;
-  }).join("");
-
-  // FIX-2026-1012b：这里原本用 <defs><linearGradient> 做渐变背景，
-  // 但 Next 的 SWC 压缩会把相邻的模板字面量折叠成单个字符串，
-  // 折叠时把 "<defs>...</defs>" 整段丢掉，还漏掉 svg 开标签的 ">"，
-  // 导致整个 SVG 被当作属性值吞掉、验证码渲染成空白。
-  // （tsc 单独编译是正确的，只有 next build 的 SWC 折叠会出错。）
-  // 改法：去掉 defs / 渐变，用纯色背景 + 数组拼接，规避字面量折叠。
-  const BG = "#F0F5FF";
-  const parts: string[] = [];
-  parts.push('<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '">');
-  parts.push('<rect width="' + w + '" height="' + h + '" fill="' + BG + '"/>');
-  parts.push(noise);
-  parts.push(dots);
-  parts.push(chars);
-  parts.push('</svg>');
-  return parts.join("");
-}
-
-/** GET /api/auth/captcha - 取新验证码（只回图片，绝不回答案文本） */
 export async function GET(_req: NextRequest) {
-  const { token, text } = issueCaptcha(4);
-  return NextResponse.json(
-    { token, svg: genSvg(text) },
-    {
-      headers: {
-        "Cache-Control": "no-store, no-cache, must-revalidate",
-        "X-Content-Type-Options": "nosniff",
-      },
-    }
-  );
+  try {
+    const { token, text } = issueCaptcha(4);
+    const png = renderCaptchaPng(text);
+    const image = "data:image/png;base64," + png.toString("base64");
+
+    return NextResponse.json(
+      { token, image },
+      {
+        headers: {
+          "Cache-Control": "no-store, no-cache, must-revalidate",
+          "X-Content-Type-Options": "nosniff",
+        },
+      }
+    );
+  } catch (error) {
+    console.error("[captcha] 渲染失败:", error);
+    return NextResponse.json(
+      { success: false, token: "", image: "", error: "验证码生成失败，请刷新重试" },
+      { status: 500, headers: { "Cache-Control": "no-store" } }
+    );
+  }
 }
 
 /**

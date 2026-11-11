@@ -98,7 +98,7 @@ export default function SetupPage() {
         </div>
         <Space>
           <Button icon={<ReloadOutlined />} loading={loading} onClick={load}>重新检测</Button>
-          <Button type="primary" icon={<RocketOutlined />} onClick={() => (window.location.href = '/')}>回车台</Button>
+          <Button type="primary" icon={<RocketOutlined />} onClick={() => (window.location.href = '/')}>回工作台</Button>
         </Space>
       </div>
 

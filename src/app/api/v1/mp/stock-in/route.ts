@@ -1,3 +1,6 @@
+import { getDataScope, withWarehouseScope, withDocumentScope, assertWarehouseAllowed, assertDocumentAllowed } from '@/lib/data-scope';
+import { hasPermissionGranted } from '@/lib/auth-guard';
+import { ForbiddenError } from '@/lib/errors';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
@@ -11,13 +14,19 @@ import { StockInService } from '@/services/stock-in.service';
  */
 export async function POST(req: NextRequest) {
   try {
-    await requireMpToken(req);
+    const auth = await requireMpToken(req);
+    for (const permission of ["stock_in:create","stock_in:post"]) {
+      if (!hasPermissionGranted(auth.user.permissions, permission)) throw new ForbiddenError('缺少业务操作权限');
+    }
+    const scope = await getDataScope(auth.user);
     const body = await req.json();
     const { code, quantity, warehouseId, locationId, boxId, remark } = body;
 
     if (!code || !quantity || !warehouseId || !locationId) {
       return NextResponse.json({ success: false, error: '缺少必填参数（编码/数量/仓库/货位）' }, { status: 400 });
     }
+    await assertWarehouseAllowed(scope, Number(warehouseId));
+    if (boxId) return NextResponse.json({ success: false, error: '扫码入库暂不支持指定盒子，请使用货位入库' }, { status: 400 });
     const qty = Number(quantity);
     if (qty <= 0) {
       return NextResponse.json({ success: false, error: '数量必须大于 0' }, { status: 400 });
@@ -28,7 +37,7 @@ export async function POST(req: NextRequest) {
       where: { OR: [{ barcode: code }, { code: code }] },
     });
     if (!product) {
-      const serial = await prisma.serialNumber.findFirst({ where: { serialNo: code } });
+      const serial = await prisma.serialNumber.findFirst({ where: withWarehouseScope({ serialNo: code }, scope) });
       if (serial) {
         product = await prisma.product.findUnique({ where: { id: serial.productId } });
       }
@@ -39,62 +48,16 @@ export async function POST(req: NextRequest) {
 
     // 创建入库单并过账
     const order = await StockInService.create({
+      operatorId: Number(auth.user.id),
       type: 'OTHER',
       warehouseId: Number(warehouseId),
       remark: remark || '小程序扫码入库',
-      items: [{ productId: Number(product.id), quantity: qty }],
+      items: [{ productId: Number(product.id), quantity: qty, locationId: Number(locationId) }],
     });
-    await StockInService.post(Number(order.id));
+    await StockInService.post(Number(order.id), Number(auth.user.id));
 
-    // 写货位/盒子库存
-    const inventory = await prisma.inventory.findUnique({
-      where: {
-        productId_warehouseId_skuVariantId: {
-          productId: product.id,
-          warehouseId: BigInt(Number(warehouseId)),
-          skuVariantId: 0,
-        },
-      },
-    });
-    let boxCode = '';
-    if (inventory) {
-      const targetBoxId = boxId ? Number(boxId) : null;
-      if (targetBoxId) {
-        const box = await prisma.box.findUnique({ where: { id: targetBoxId }, select: { code: true } });
-        boxCode = box?.code || '';
-      }
-      const existingLocStock = await prisma.locationStock.findFirst({
-        where: {
-          inventoryId: inventory.id,
-          locationId: BigInt(Number(locationId)),
-          boxId: targetBoxId !== null ? BigInt(targetBoxId) : null,
-        },
-      });
-      const latestLot = await prisma.inventoryLot.findFirst({
-        where: { productId: product.id, warehouseId: BigInt(Number(warehouseId)) },
-        orderBy: { id: 'desc' },
-        select: { lotNumber: true },
-      });
-
-      if (existingLocStock) {
-        await prisma.locationStock.update({
-          where: { id: existingLocStock.id },
-          data: { quantity: { increment: qty } },
-        });
-      } else {
-        await prisma.locationStock.create({
-          data: {
-            inventoryId: inventory.id,
-            productId: product.id,
-            warehouseId: BigInt(Number(warehouseId)),
-            locationId: BigInt(Number(locationId)),
-            boxId: targetBoxId !== null ? BigInt(targetBoxId) : null,
-            lotNumber: latestLot?.lotNumber || null,
-            quantity: qty,
-          },
-        });
-      }
-    }
+    // StockInService.post is the sole inventory/location writer; never increment twice.
+    const boxCode = '';
 
     return NextResponse.json(serializeBigInt({
       success: true,

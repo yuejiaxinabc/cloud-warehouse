@@ -7,7 +7,6 @@ import {
   Avatar,
   Space,
   Button,
-  List,
   Tag,
   Empty,
 } from 'antd';
@@ -21,6 +20,7 @@ import {
   InfoCircleOutlined,
 } from '@ant-design/icons';
 import { signOut, useSession } from 'next-auth/react';
+import { useRouter } from 'next/navigation';
 import type { MenuProps } from 'antd';
 
 interface AlertItem {
@@ -32,25 +32,36 @@ interface AlertItem {
   createdAt: string;
 }
 
+/**
+ * 独立版顶栏（1.2.4 分工 A：毛玻璃 + 大圆角 + 移动端不溢出）。
+ * 注意：主布局实际使用的是 Sidebar.tsx 内嵌的顶栏，本文件仅作独立复用入口，
+ * 行为与之一致（预警角标口径 = 预警中心「全部预警」条数）。
+ */
 const Header: React.FC = () => {
   const { data: session } = useSession();
+  const router = useRouter();
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
+  // F12：角标口径 = 预警中心「全部预警」条数（不再用未读数，避免铃铛 10 条而中心显示不一致）
+  const [alertCount, setAlertCount] = useState(0);
 
   useEffect(() => {
     loadAlerts();
+    // 与预警中心保持同步刷新，页面停留久了角标也不会和实际条数漂移
+    const timer = setInterval(loadAlerts, 60_000);
+    return () => clearInterval(timer);
   }, []);
 
   const loadAlerts = async () => {
     try {
-      const res = await fetch('/api/alerts?status=UNREAD&pageSize=5');
+      // F12：与 /alerts 页面同一个数据源与筛选条件（type=all），total 即中心列表总条数
+      const res = await fetch('/api/alerts?type=all&pageSize=10', { cache: 'no-store' });
       const data = await res.json();
       if (data.success) {
         setAlerts(data.data.items || []);
-        setUnreadCount(data.data.total || 0);
+        setAlertCount(Number(data.data.total ?? (data.data.items || []).length));
       }
     } catch (e) {
-      console.error('加载通知失败:', e);
+      console.error('加载预警失败:', e);
     }
   };
 
@@ -79,33 +90,33 @@ const Header: React.FC = () => {
         <div style={{ maxWidth: 300, padding: '4px 0' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
             {getAlertIcon(alert.type)}
-            <span style={{ fontWeight: 500, color: '#374151' }}>{alert.title}</span>
+            <span style={{ fontWeight: 500, color: 'var(--text)' }}>{alert.title}</span>
             <Tag color={getAlertColor(alert.type)} style={{ marginLeft: 'auto', fontSize: 11 }}>
               {alert.type === 'LOW_STOCK' ? '库存不足' : alert.type === 'EXPIRING' ? '临期预警' : '其他'}
             </Tag>
           </div>
-          <div style={{ fontSize: 12, color: '#6B7280', paddingLeft: 24 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', paddingLeft: 24 }}>
             {alert.message}
           </div>
-          <div style={{ fontSize: 11, color: '#9CA3AF', paddingLeft: 24, marginTop: 4 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', paddingLeft: 24, marginTop: 4 }}>
             {new Date(alert.createdAt).toLocaleString('zh-CN')}
           </div>
         </div>
       ),
     })) : [{
       key: 'empty',
-      label: <Empty description="暂无新通知" image={Empty.PRESENTED_IMAGE_SIMPLE} />,
+      label: <Empty description="暂无预警" image={Empty.PRESENTED_IMAGE_SIMPLE} />,
       disabled: true,
     }]),
     { type: 'divider' },
     {
       key: 'view-all',
       label: (
-        <div style={{ textAlign: 'center', color: '#1976D2', padding: '4px 0' }}>
-          查看全部通知
+        <div style={{ textAlign: 'center', color: 'var(--primary)', padding: '4px 0' }}>
+          查看全部预警
         </div>
       ),
-      onClick: () => window.location.href = '/alerts',
+      onClick: () => router.push('/alerts'),
     },
   ];
 
@@ -116,7 +127,7 @@ const Header: React.FC = () => {
       label: (
         <div>
           <div style={{ fontWeight: 500 }}>{session?.user?.name || '用户'}</div>
-          <div style={{ fontSize: 12, color: '#6B7280' }}>{session?.user?.email || ''}</div>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{session?.user?.email || ''}</div>
         </div>
       ),
       disabled: true,
@@ -126,7 +137,7 @@ const Header: React.FC = () => {
       key: 'settings',
       icon: <SettingOutlined />,
       label: '系统设置',
-      onClick: () => window.location.href = '/settings',
+      onClick: () => router.push('/settings'),
     },
     {
       key: 'logout',
@@ -138,15 +149,16 @@ const Header: React.FC = () => {
   ];
 
   return (
-    <div style={{
-      display: 'flex',
-      justifyContent: 'flex-end',
-      alignItems: 'center',
-      padding: '0 24px',
-      height: 56,
-      background: '#fff',
-      borderBottom: '1px solid #E5E7EB',
-    }}>
+    <div
+      className="yc-header-standalone"
+      style={{
+        display: 'flex',
+        justifyContent: 'flex-end',
+        alignItems: 'center',
+        padding: '0 24px',
+        height: 56,
+      }}
+    >
       <Space size={20} align="center">
         {/* 消息铃铛 */}
         <Dropdown
@@ -157,24 +169,26 @@ const Header: React.FC = () => {
           dropdownRender={(menu) => (
             <div style={{
               background: '#fff',
-              borderRadius: 8,
-              boxShadow: '0 6px 16px 0 rgba(0,0,0,0.08), 0 3px 6px -4px rgba(0,0,0,0.12), 0 9px 28px 8px rgba(0,0,0,0.05)',
-              minWidth: 320,
+              borderRadius: 16,
+              boxShadow: '0 12px 32px -12px rgba(16,24,40,0.22)',
+              minWidth: 'min(320px, calc(100vw - 32px))',
+              maxWidth: 'calc(100vw - 32px)',
               maxHeight: 400,
               overflow: 'auto',
             }}>
               <div style={{ padding: '12px 16px', borderBottom: '1px solid #f0f0f0', fontWeight: 500 }}>
-                通知 {unreadCount > 0 && <Badge count={unreadCount} style={{ marginLeft: 8 }} />}
+                全部预警 {alertCount > 0 && <Badge count={alertCount} style={{ marginLeft: 8 }} />}
               </div>
               {menu}
             </div>
           )}
         >
-          <Badge count={unreadCount} size="small" offset={[-2, 4]}>
+          {/* F12：角标数 = 预警中心同口径条数 */}
+          <Badge count={alertCount} size="small" offset={[-2, 4]}>
             <Button
               type="text"
               icon={<BellOutlined style={{ fontSize: 18 }} />}
-              style={{ color: '#6B7280' }}
+              style={{ color: 'var(--text-secondary)' }}
             />
           </Badge>
         </Dropdown>
@@ -189,9 +203,9 @@ const Header: React.FC = () => {
             <Avatar
               size={32}
               icon={<UserOutlined />}
-              style={{ backgroundColor: '#1890ff' }}
+              style={{ background: 'linear-gradient(135deg,#3B82F6,#1D4ED8)' }}
             />
-            <span style={{ fontSize: 13, color: '#374151' }}>
+            <span style={{ fontSize: 13, color: 'var(--text)' }}>
               {session?.user?.name || '用户'}
             </span>
           </Space>

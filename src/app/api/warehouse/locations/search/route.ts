@@ -1,11 +1,14 @@
+import { businessAccess, assertWarehouseAllowed, withWarehouseScope, checkZone, checkLocation } from '@/app/api/warehouse/access';
 import { getServerSession } from 'next-auth';
 import { NextRequest, NextResponse } from 'next/server';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
+import { handleApiError } from '@/lib/errors';
 
 export async function GET(req: NextRequest) {
   try {
+    const { scope } = await businessAccess();
     const { searchParams } = new URL(req.url);
     const warehouseId = searchParams.get('warehouseId');
     const keyword = searchParams.get('keyword') || '';
@@ -16,7 +19,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: '缺少 warehouseId' }, { status: 400 });
     }
 
-    // 查询该仓库下所有启用的货位和货位
+    await assertWarehouseAllowed(scope, Number(warehouseId));
+// 查询该仓库下所有启用的货位和货位
     const where: any = {
       status: 1,
       zone: { warehouseId: BigInt(warehouseId) },
@@ -67,6 +71,6 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ success: true, data: { items, total, page, pageSize } });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }

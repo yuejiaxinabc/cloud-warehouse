@@ -1,69 +1,100 @@
 "use client";
 
 import { Typography } from "antd";
-import { ArrowLeftOutlined } from "@ant-design/icons";
-import Link from "next/link";
+import LegalLayout from "@/components/legal/LegalLayout";
 
-const { Title, Paragraph, Text } = Typography;
+const { Paragraph } = Typography;
+
+const META = {
+  title: "隐私政策",
+  version: "2.0",
+  updatedAt: "2026-11-11",
+  effectiveAt: "2026-11-11",
+};
+
+function H({ children }: { children: React.ReactNode }) {
+  return <h4 style={{ margin: "24px 0 8px", fontSize: 15.5, color: "#0B1220" }}>{children}</h4>;
+}
 
 export default function PrivacyPage() {
   return (
-    <div style={{ minHeight: "100dvh", background: "#F8FAFC", padding: "40px 20px" }}>
-      <div style={{ maxWidth: 720, margin: "0 auto", background: "#fff", borderRadius: 12, padding: "40px 36px", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
-        <Link href="/login" style={{ fontSize: 14, color: "#64748B", display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 24 }}>
-          <ArrowLeftOutlined /> 返回登录
-        </Link>
-        <h2 style={{ marginBottom: 8 }}>隐私政策</h2>
-        <Text type="secondary">最后更新：2026年8月15日</Text>
+    <LegalLayout meta={META}>
+      <Paragraph style={{ color: "#475569" }}>
+        本政策说明云仓智能仓储管理平台（以下简称「本系统」）在运行过程中会处理哪些信息、为什么处理、存储在哪里、保存多久，以及你可以如何行使权利。
+        本系统为企业内部系统，不面向公众注册，不投放广告，不做用户画像与商业推送。
+      </Paragraph>
 
-        <div style={{ marginTop: 32, lineHeight: 2, color: "#334155", fontSize: 14 }}>
-          <h4>1. 信息收集</h4>
-          <Paragraph>
-            本系统收集以下信息以提供服务：<br/>
-            • 账号信息：用户名、密码（加密存储）、手机号、邮箱<br/>
-            • 操作记录：登录日志、业务操作日志<br/>
-            • 业务数据：商品信息、库存数据、出入库记录等仓储业务数据<br/>
-            • 设备信息：IP 地址、浏览器类型（用于安全审计）
-          </Paragraph>
+      <H>1. 我们处理的信息</H>
+      <Paragraph>
+        <strong>（1）账号与身份信息</strong>：用户名、姓名、密码（仅存 bcrypt 哈希，不可逆）、手机号、邮箱、所属组织、角色、账号启用状态、最后登录时间。
+        <br /><strong>（2）认证与安全信息</strong>：两步验证密钥（TOTP，仅你本人可绑定/解绑）、密码重置令牌（一次性、1~24 小时有效）、登录失败次数与临时锁定状态、会话标识。
+        <br /><strong>（3）业务数据</strong>：商品与主数据、库存与批次、入库/出库/调拨/盘点单据、货位与货架信息、供应商与客户档案、你上传的图片与附件。
+        <br /><strong>（4）日志与设备信息</strong>：登录日志（时间、账号、动作、结果、失败原因、IP 地址、浏览器 User-Agent）、操作日志（模块、动作、对象、内容、操作人、IP）。
+        <br /><strong>（5）系统配置</strong>：单位名称、联系方式、SMTP 邮件配置、备份策略等管理性配置。
+      </Paragraph>
 
-          <h4>2. 信息使用</h4>
-          <Paragraph>
-            收集的信息仅用于：<br/>
-            • 提供和维护系统服务<br/>
-            • 账号安全验证和身份识别<br/>
-            • 业务数据分析和报表生成<br/>
-            • 系统安全监控和异常告警
-          </Paragraph>
+      <H>2. 处理目的</H>
+      <Paragraph>
+        • 完成身份认证与授权，落实「功能权限 + 数据权限」的访问控制；
+        <br />• 支撑仓储业务的正常开展（建单、过账、盘点、报表）；
+        <br />• 安全审计与追责：定位异常登录、越权访问、数据误操作；
+        <br />• 系统运维：备份与恢复、故障排查、容量与性能观察；
+        <br />• 向你发送你订阅的报表邮件，或在你主动找回密码时发送验证信息。
+      </Paragraph>
 
-          <h4>3. 信息存储与保护</h4>
-          <Paragraph>
-            • 用户密码使用 bcrypt 算法加密存储，系统无法获取明文<br/>
-            • 验证码 Token 采用一次性消费机制，防止重放攻击<br/>
-            • API 接口实施认证鉴权，防止未授权访问<br/>
-            • 数据存储在安全的服务器环境中，定期备份
-          </Paragraph>
+      <H>3. Cookie 与本地存储</H>
+      <Paragraph>
+        本系统仅使用必要的登录会话 Cookie（NextAuth 会话票据，默认 8 小时有效，HttpOnly、SameSite=Lax），用于维持登录状态。
+        <strong>不使用广告或第三方追踪 Cookie</strong>。浏览器本地可能缓存页面静态资源，不含业务数据。
+      </Paragraph>
 
-          <h4>4. 信息共享</h4>
-          <Paragraph>未经用户同意，我们不会将用户信息出售、出租或以其他方式分享给第三方，法律法规要求除外。</Paragraph>
+      <H>4. 存储位置与保存期限</H>
+      <Paragraph>
+        • 数据存储在<strong>你所在单位自行部署的服务器</strong>上（数据库为 MySQL，上传文件存于应用目录），不经由本系统以外的第三方云存储。
+        <br />• 账号与业务数据在账号/单位存续期间保存；账号停用后仍保留于系统内，供审计与追溯，直至管理员按单位要求删除。
+        <br />• 登录日志与操作日志用于审计，由管理员在「日志」页面按需清理；清理动作本身会再记一条系统日志（含操作人、时间、清理条数）。
+        <br />• 备份文件默认保留 <strong>30 天</strong>（管理员可调整），到期自动删除，并始终保留最近一次成功备份。
+      </Paragraph>
 
-          <h4>5. 用户权利</h4>
-          <Paragraph>
-            用户有权：<br/>
-            • 查看和修改个人资料<br/>
-            • 修改密码<br/>
-            • 联系管理员删除账号及相关数据
-          </Paragraph>
+      <H>5. 安全措施</H>
+      <Paragraph>
+        • 密码使用 bcrypt 加盐哈希存储，系统无法还原明文；支持两步验证（TOTP）。
+        <br />• 登录需图形验证码，并对同一 IP 与同一账号分别限流；连续失败会触发账号临时锁定（30 分钟），防止暴力破解。
+        <br />• 会话带版本号，账号停用、改密、重置密码后旧会话立即失效，不能靠旧 Cookie 继续访问。
+        <br />• 接口按权限码与数据范围双重校验，越权访问返回 403；管理面操作写入审计日志。
+        <br />• 备份文件以 600 权限存放于服务器本地，<strong>未额外加密</strong>，请通过服务器访问控制与磁盘权限保护。
+        <br />• 当前部署若为 HTTP 访问，链路未加密；<strong>正式环境应启用 HTTPS</strong>（含 HSTS 与安全 Cookie），以降低会话被截获的风险。
+      </Paragraph>
 
-          <h4>6. Cookie 使用</h4>
-          <Paragraph>本系统使用 Session Cookie 维持登录状态，不用于广告追踪。</Paragraph>
+      <H>6. 共享与委托处理</H>
+      <Paragraph>
+        • 我们<strong>不会出售、出租或交换</strong>你的信息。
+        <br />• 仅在你单位配置了 SMTP 邮件服务时，为发送报表订阅或找回密码邮件，相关收件地址与邮件内容会经邮件服务商传输；邮件服务商由你单位自行选择与配置。
+        <br />• 服务器、网络等基础设施由你单位或其云服务商提供，其日志与访问控制适用对应服务条款。
+        <br />• 法律法规要求或司法机关依法要求时，可能按要求提供必要信息。
+      </Paragraph>
 
-          <h4>7. 政策更新</h4>
-          <Paragraph>我们可能会不时更新本政策，更新后将在登录页面公示。继续使用本系统即视为同意更新后的政策。</Paragraph>
+      <H>7. 你的权利</H>
+      <Paragraph>
+        • <strong>查询与更正</strong>：登录后在「系统设置 → 个人资料」查看并修改姓名、手机号、邮箱；账号、组织与角色由管理员维护。
+        <br />• <strong>修改密码</strong>：在「修改密码」中自助修改；忘记密码时可通过「忘记密码」申请，或由管理员签发一次性重置令牌。
+        <br />• <strong>导出</strong>：业务数据可由有权限的账号在报表/列表页导出。
+        <br />• <strong>删除与注销</strong>：账号与业务数据不提供自助删除，请向管理员提出，由管理员在系统中停用/删除账号，或按单位数据留存要求处理。
+        <br />• 我们会在合理期限内响应你的请求；涉及他人数据或审计留痕的，可能依法保留必要记录。
+      </Paragraph>
 
-          <h4>8. 联系方式</h4>
-          <Paragraph>如对本隐私政策有疑问，请联系系统管理员。</Paragraph>
-        </div>
-      </div>
-    </div>
+      <H>8. 未成年人</H>
+      <Paragraph>本系统面向企业员工使用，不面向未成年人提供服务。若发现未成年人信息被录入，请联系管理员删除。</Paragraph>
+
+      <H>9. 政策更新</H>
+      <Paragraph>
+        本政策可能随功能与合规要求更新，更新后会在本页公示版本号与生效日期。涉及处理范围或目的的实质性变化，会通过系统公告或管理员通知告知。
+      </Paragraph>
+
+      <H>10. 联系我们</H>
+      <Paragraph>
+        对本政策有疑问、需要行使上述权利，或发现信息处理异常，请联系你单位的系统管理员；联系方式见本页底部（取自系统设置）。
+      </Paragraph>
+    </LegalLayout>
   );
 }

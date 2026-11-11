@@ -1,6 +1,6 @@
 # ☁️ 云仓 · 智能仓储管理平台
 
-![Version](https://img.shields.io/badge/version-v1.2.0-blue) ![Next.js](https://img.shields.io/badge/Next.js-14.2-black) ![Prisma](https://img.shields.io/badge/Prisma-5-2D3748) ![License](https://img.shields.io/badge/license-MIT-green) ![Security](https://img.shields.io/badge/security-2FA%20%7C%20audit-orange)
+![Version](https://img.shields.io/badge/version-v1.2.4-blue) ![Next.js](https://img.shields.io/badge/Next.js-14.2-black) ![Prisma](https://img.shields.io/badge/Prisma-5-2D3748) ![License](https://img.shields.io/badge/license-MIT-green) ![Security](https://img.shields.io/badge/security-2FA%20%7C%20audit-orange)
 
 > 面向中小型制造、零售与贸易企业的全链路库存管理系统。浏览器打开即用，从「货什么时候进来的、哪个批次、什么时候到期」到「放在哪个货架哪个格子」，全程可追溯。
 
@@ -8,7 +8,7 @@
 
 ---
 
-## ✨ 功能总览（v1.2.0）
+## ✨ 功能总览（v1.2.4）
 
 **核心业务**
 
@@ -67,7 +67,8 @@ npm run build && npm start
 | 文档 | 内容 |
 |------|------|
 | **[docs/云仓用户手册-v1.2.0.pdf](docs/云仓用户手册-v1.2.0.pdf)** | **用户手册（PDF，27 页）**：全模块操作、字段说明、FAQ |
-| [docs/CHANGELOG.md](docs/CHANGELOG.md) | 版本历史：v1.2.0 分五批落地全部需求 |
+| [docs/CHANGELOG.md](docs/CHANGELOG.md) | 版本历史：v1.2.2 测试整改 / v1.2.1 QA 首轮 / v1.2.0 功能批次 |
+| [docs/UPDATE-2026-10-31.md](docs/UPDATE-2026-10-31.md) | v1.2.2 整改说明：H1~H3 / M1~M7 / F1~F13 逐条对照 |
 | [docs/ROADMAP-v1.2.md](docs/ROADMAP-v1.2.md) | 需求评审：12 条需求的逐条核对、优先级与工作量 |
 | [docs/UPDATE-2026-10-28.md](docs/UPDATE-2026-10-28.md) | v1.1.1 修复说明（新建商品 P0、日志、表单、验证码） |
 | [docs/UPDATE-2026-10-27.md](docs/UPDATE-2026-10-27.md) | v1.0.2 更新说明（安全复检、货位闭环） |

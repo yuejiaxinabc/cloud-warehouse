@@ -1,11 +1,14 @@
 "use client";
+import { fetchAllPages } from '@/lib/fetch-all-pages';
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Card, Table, Button, Space, Input, Select, Tag, Row, Col, Modal, Form, message, Typography, Descriptions, InputNumber, Alert, DatePicker } from "antd";
 import { useRouter } from "next/navigation";
 import { PlusOutlined, SearchOutlined, CheckCircleOutlined, ScanOutlined, PrinterOutlined, EyeOutlined, CameraOutlined } from "@ant-design/icons";
 import dynamic from "next/dynamic";
 const BarcodeScanner = dynamic(() => import("@/components/BarcodeScanner"), { ssr: false });
+// L4：状态展示统一走 StatusBadge（中文映射唯一出口）
+import { OrderStatusBadge } from "@/components/ui/StatusBadge";
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -20,11 +23,31 @@ export default function StockInPage() {
   const loadLocations = async (warehouseId?: number) => {
     if (!warehouseId) { setLocations([]); return; }
     try {
-      const res = await fetch(`/api/warehouse/locations?warehouseId=${warehouseId}`, { cache: 'no-store' });
+      // v1.2.1（P2-7）：必须带 limit。后端新默认分页只回 200 条，仓库货位 2600+ 会漏；
+      // limit=2000 只是当前折中，后续应改成按编码服务端搜索（v1.2.1 先不发散）。
+      // 注意不能加 empty=1：本页要显示被同商品占用的货位用于补货。
+      const res = await fetch(`/api/warehouse/locations?warehouseId=${warehouseId}&limit=2000`, { cache: 'no-store' });
       const j = await res.json();
       if (j.success) setLocations(j.data || []);
     } catch { setLocations([]); }
   };
+  /**
+   * v1.2.1（P2-7）：货位能否选要看「本行商品是不是占用它的那个商品」
+   * 同一商品补货继续用原货位是允许的（后端 assertLocationAvailableFor 同样放行），
+   * 之前一律 disabled: !!l.occupiedBy，补货只能另开新货位。
+   * 判定按 productId 是否相等，不用商品名文本比较（改名/同名商品会误判）。
+   */
+  const toLocationOption = (l: any, productId?: any) => {
+    const occ = l.occupiedBy;
+    const sameProduct = !!occ && productId !== undefined && productId !== null && String(occ.productId) === String(productId);
+    const label = occ
+      ? l.code + (sameProduct
+          ? `（本商品已存放：${occ.productName}，可继续补货）`
+          : `（已放：${occ.productName}，不可混放）`)
+      : l.code + '（空）';
+    return { value: l.id, label, disabled: !!occ && !sameProduct };
+  };
+
   const [showCamera, setShowCamera] = useState(false);
   const scanInputRef = useRef<any>(null);
   const [scanResult, setScanResult] = useState<any>(null);
@@ -42,7 +65,12 @@ export default function StockInPage() {
   const [page, setPage] = useState(1);
   const [form] = Form.useForm();
   const [scanForm] = Form.useForm();
+  // v1.2.1（P2-7）：手动创建是「一单多行商品」，货位可用性要逐行判断，故监听明细数组
+  const createItems = Form.useWatch<any[]>('items', form);
   const [isMobile, setIsMobile] = useState(false);
+  // F4：过账确认框单例锁 + 按钮 loading，双击不会再叠出第二个确认框
+  const confirmLockRef = useRef(false);
+  const [postingId, setPostingId] = useState<number | null>(null);
 
   useEffect(() => {
     const checkMobile = () => setIsMobile(window.innerWidth < 768);
@@ -74,9 +102,8 @@ export default function StockInPage() {
 
   const loadProducts = async () => {
     try {
-      const res = await fetch("/api/products?pageSize=1000");
-      const data = await res.json();
-      if (data.success) setProducts(data.data?.items || []);
+      const items = await fetchAllPages("/api/products");
+      setProducts(items);
     } catch (e) { console.error(e); }
   };
 
@@ -111,12 +138,11 @@ export default function StockInPage() {
       // 本地没找到，查API
       if (!found) {
         try {
-          const res = await fetch("/api/products?pageSize=1000&keyword=" + encodeURIComponent(barcode));
-          const data = await res.json();
-          if (data.success && data.data?.items?.length > 0) {
-            found = data.data.items.find((p: any) => 
+          const hits = await fetchAllPages("/api/products?keyword=" + encodeURIComponent(barcode));
+          if (hits.length > 0) {
+            found = hits.find((p: any) => 
               p.barcode === barcode || p.code === barcode || String(p.id) === barcode
-            ) || data.data.items[0];
+            ) || hits[0];
           }
         } catch {}
       }
@@ -136,10 +162,14 @@ export default function StockInPage() {
     setScanLoading(false);
   };
 
-  const handleCameraScan = (code: string) => {
+  // 摄像头回调必须身份稳定：BarcodeScanner 的启动 effect 依赖 onScan，
+  // 此前每次父组件渲染都生成新回调，导致摄像头反复 stop/重启动、一直卡在“正在启动摄像头…”
+  const handleScanRef = useRef(handleScan);
+  handleScanRef.current = handleScan;
+  const handleCameraScan = useCallback((code: string) => {
     setShowCamera(false);
-    handleScan(code);
-  };
+    handleScanRef.current(code);
+  }, []);
 
   const handleScanSubmit = async () => {
     try {
@@ -201,20 +231,24 @@ export default function StockInPage() {
     }
   };
 
-  const getStatusTag = (status: string) => {
-    const statusMap: Record<string, { color: string; text: string }> = {
-      DRAFT: { color: "default", text: "草稿" },
-      POSTED: { color: "success", text: "已过账" },
-      CANCELLED: { color: "error", text: "已取消" },
-    };
-    const s = statusMap[status] || { color: "default", text: status };
-    return <Tag color={s.color}>{s.text}</Tag>;
-  };
+  // L4：不再在本页单独维护状态映射（旧映射缺项时会把 DRAFT/POSTED 等英文码直接渲染出去）
+  const getStatusTag = (status: string) => <OrderStatusBadge status={status} />;
 
-  const handlePost = async (id: number) => {
+  /**
+   * F4 修复：过账确认框改成单例防重入。
+   * 第一次点击立刻把 confirmLockRef 置位，第二次点击直接 return，
+   * 不会再叠出第二个 Modal.confirm（旧版两个遮罩互相挡住，只能刷新页面）。
+   * 关闭确认框（确认/取消/点遮罩）后才在 afterClose 解锁。
+   */
+  const handlePost = (id: number) => {
+    if (confirmLockRef.current) return;
+    confirmLockRef.current = true;
+    setPostingId(id);
     Modal.confirm({
       title: "确认过账",
       content: "过账后将更新库存，确定要过账吗？",
+      okText: "确认过账",
+      cancelText: "取消",
       onOk: async () => {
         try {
           const res = await fetch(`/api/stock-in/${id}/post`, { method: "POST" });
@@ -227,8 +261,12 @@ export default function StockInPage() {
           }
         } catch (e) {
           message.error("过账失败");
+        } finally {
+          setPostingId(null);
         }
       },
+      onCancel: () => setPostingId(null),
+      afterClose: () => { confirmLockRef.current = false; },
     });
   };
 
@@ -239,17 +277,29 @@ export default function StockInPage() {
       { title: "仓库", dataIndex: ["warehouse", "name"], key: "warehouse", width: 120, render: (_: any, r: any) => r.warehouse?.name || "-" },
       { title: "供应商", dataIndex: ["supplier", "name"], key: "supplier", width: 150, render: (_: any, r: any) => r.supplier?.name || "-" },
     ] : []),
-    { title: "状态", dataIndex: "status", key: "status", width: isMobile ? 80 : 100, render: (s: string) => getStatusTag(s) },
+    // F10：窄屏下表格横向滚动时「状态」列会滑出可视区，这里固定在右侧，
+    // 保证 375px/平板宽度下也能看到单据状态并判断能否过账
+    { title: "状态", dataIndex: "status", key: "status", width: isMobile ? 76 : 100, fixed: isMobile ? ("right" as const) : undefined, render: (s: string) => getStatusTag(s) },
     ...(!isMobile ? [
       { title: "商品数", key: "itemCount", width: 80, render: (_: any, r: any) => r.inboundItems?.length || 0 },
       { title: "创建时间", dataIndex: "createdAt", key: "createdAt", width: 160, render: (d: string) => d ? new Date(d).toLocaleString("zh-CN") : "-" },
     ] : []),
     {
-      title: "操作", key: "action", width: isMobile ? 80 : 180, fixed: "right" as const,
+      title: "操作", key: "action", width: isMobile ? 84 : 180, fixed: "right" as const,
       render: (_: any, record: any) => (
         <Space size={isMobile ? 0 : 4}>
-          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => router.push(`/stock-in/${record.id}`)}>{isMobile ? "" : "查看"}</Button>
-          {!isMobile && <Button type="link" size="small" icon={<CheckCircleOutlined />} onClick={() => handlePost(record.id)}>过账</Button>}
+          <Button type="link" size="small" icon={<EyeOutlined />} title={isMobile ? "查看" : undefined} aria-label="查看" onClick={() => router.push(`/stock-in/${record.id}`)}>{isMobile ? "" : "查看"}</Button>
+          {/* F3+L5：只有草稿才渲染「过账」；已过账/已取消只给详情，
+              不再出现点了才被服务端拒绝（当前状态"POSTED"不允许执行"过账"操作） */}
+          {record.status === "DRAFT" && (
+            <Button type="link" size="small" icon={<CheckCircleOutlined />}
+              title={isMobile ? "过账" : undefined}
+              aria-label="过账"
+              loading={postingId === record.id}
+              disabled={postingId === record.id}
+              onClick={() => handlePost(record.id)}>{isMobile ? "" : "过账"}</Button>
+          )}
+          {/* 移动端保留过账入口，用户不用切到桌面端也能过账 */}
         </Space>
       ),
     },
@@ -257,7 +307,7 @@ export default function StockInPage() {
 
   return (
     <div style={{ padding: isMobile ? 12 : 24 }}>
-      <h4 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: "#0F172A", whiteSpace: "nowrap" }}>入库管理</h4>
+      <h4 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: "#0F172A", whiteSpace: "nowrap" }}>扫码入库</h4>
 
       {!isMobile && (
         <Alert message="入库说明" description="扫描商品条码自动识别，只有已添加的商品才能扫码入库。支持手动创建入库单。" type="info" showIcon style={{ marginBottom: 16 }} />
@@ -297,28 +347,31 @@ export default function StockInPage() {
       </Card>
 
       {/* 扫码入库弹窗 */}
-      <Modal title="扫码入库" open={scanModalOpen} onCancel={() => { setScanModalOpen(false); setShowCamera(false); setScanResult(null); scanForm.resetFields(); }} width={isMobile ? "95%" : 600}
+      {/* L6：destroyOnClose 让关闭的弹窗从 DOM 卸载，避免扫码弹窗与创建弹窗同时挂载出现两个 id="warehouseId" */}
+      <Modal title="扫码入库" open={scanModalOpen} destroyOnClose onCancel={() => { setScanModalOpen(false); setShowCamera(false); setScanResult(null); scanForm.resetFields(); }} width={isMobile ? "95%" : 600}
         footer={[
           <Button key="cancel" onClick={() => { setScanModalOpen(false); setScanResult(null); }}>取消</Button>,
           <Button key="submit" type="primary" onClick={handleScanSubmit}>确认入库</Button>,
         ]}>
         <Form form={scanForm} layout="vertical">
-          <Form.Item label="扫码识别">
-            {showCamera ? (
+          {/* L6：无 name 的 Form.Item 手写 htmlFor，与下面输入框 id 对应（label 不再脱离控件） */}
+          <Form.Item label="扫码识别" htmlFor="stockInScanCode">
+            {showCamera && (
               <div style={{ marginBottom: 12 }}>
                 <BarcodeScanner onScan={handleCameraScan} onClose={() => setShowCamera(false)} />
-                <Button block style={{ marginTop: 8 }} onClick={() => setShowCamera(false)}>关闭摄像头</Button>
-              </div>
-            ) : (
-              <div style={{ display: "flex", gap: 8 }}>
-                {isMobile && (
-                  <Button icon={<CameraOutlined />} size="large" onClick={() => setShowCamera(true)} style={{ flexShrink: 0 }}>
-                    扫码
-                  </Button>
-                )}
-                <Input.Search ref={scanInputRef} placeholder="手动输入条码/SKU" size="large" onSearch={handleScan} loading={scanLoading} style={{ flex: 1 }} autoFocus allowClear />
+                <Button block style={{ marginTop: 8 }} onClick={() => setShowCamera(false)}>关闭摄像头，改用手动输入</Button>
               </div>
             )}
+            {/* 手动输入框始终可见：摄像头启动失败、无摄像头或一直“正在启动”时，可直接在此输入条码 */}
+            <div style={{ display: "flex", gap: 8 }}>
+              {!showCamera && (
+                <Button icon={<CameraOutlined />} size="large" onClick={() => setShowCamera(true)} style={{ flexShrink: 0 }}>
+                  扫码
+                </Button>
+              )}
+              <Input.Search id="stockInScanCode" ref={scanInputRef} placeholder="手动输入条码/SKU" size="large" onSearch={handleScan} loading={scanLoading} style={{ flex: 1 }} autoFocus allowClear />
+            </div>
+            {showCamera && <div style={{ fontSize: 12, color: "#64748B", marginTop: 6 }}>摄像头无法启动时，可直接在上方输入框手动输入条码后回车查询</div>}
           </Form.Item>
           {scanResult && (
             <Alert type="success" showIcon style={{ marginBottom: 16 }}
@@ -397,11 +450,9 @@ export default function StockInPage() {
                   showSearch
                   optionFilterProp="label"
                   notFoundContent="该仓库暂无可用货位"
-                  options={locations.filter((l: any) => l.status === 1).map((l: any) => ({
-                    value: l.id,
-                    label: l.code + (l.occupiedBy ? `（已放：${l.occupiedBy.productName}）` : '（空）'),
-                    disabled: !!l.occupiedBy,
-                  }))}
+                  options={locations
+                    .filter((l: any) => l.status === 1)
+                    .map((l: any) => toLocationOption(l, scanResult?.id))}
                 />
               </Form.Item>
             </Col>
@@ -410,7 +461,8 @@ export default function StockInPage() {
       </Modal>
 
       {/* 手动创建弹窗 */}
-      <Modal title="手动创建入库单" open={createModalOpen} onCancel={() => { setCreateModalOpen(false); form.resetFields(); }} width={isMobile ? "95%" : 640} onOk={handleCreate}>
+      {/* L6：同样 destroyOnClose，保证同一时刻 DOM 里只有一份表单 id（warehouseId/locationId 不重复） */}
+      <Modal title="手动创建入库单" open={createModalOpen} destroyOnClose onCancel={() => { setCreateModalOpen(false); form.resetFields(); }} width={isMobile ? "95%" : 640} onOk={handleCreate}>
         <Form form={form} layout="vertical">
           <Row gutter={isMobile ? 8 : 16}>
             <Col span={isMobile ? 24 : 12}>
@@ -485,11 +537,7 @@ export default function StockInPage() {
                             notFoundContent="该仓库暂无可用货位"
                             options={locations
                               .filter((l: any) => l.status === 1)
-                              .map((l: any) => ({
-                                value: l.id,
-                                label: l.code + (l.occupiedBy ? `（已放：${l.occupiedBy.productName}）` : '（空）'),
-                                disabled: !!l.occupiedBy,
-                              }))}
+                              .map((l: any) => toLocationOption(l, createItems?.[name]?.productId))}
                           />
                         </Form.Item>
                       </Col>
@@ -512,7 +560,7 @@ export default function StockInPage() {
       </Modal>
     
       {/* 快速添加商品弹窗 */}
-      <Modal title="快速添加商品" open={quickAddOpen} onCancel={() => setQuickAddOpen(false)} footer={null} width={isMobile ? "95%" : 480}>
+      <Modal title="快速添加商品" open={quickAddOpen} destroyOnClose onCancel={() => setQuickAddOpen(false)} footer={null} width={isMobile ? "95%" : 480}>
         <Form form={quickAddForm} layout="vertical" onFinish={async (values) => {
           try {
             const res = await fetch("/api/products", {

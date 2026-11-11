@@ -1,67 +1,48 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, authErrorResponse } from '@/lib/auth-guard';
 import { prisma } from '@/lib/prisma';
-import { assertLocationInWarehouse } from '@/lib/location-binding';
-import { assertLocationAvailableFor } from '@/lib/location-occupancy';
+import { AppError, handleApiError } from '@/lib/errors';
+import { lockOrderRow } from '@/lib/order-lock';
+import { assertDocumentAllowed } from '@/lib/data-scope';
+import { businessAccess } from '@/app/api/warehouse/access';
+import { positiveId } from '@/app/api/location-stocks/allocate';
 
-/**
- * POST /api/stock-in/[id]/location
- *
- * 给「草稿」入库单的明细分配货位（FIX-2026-1019）。
- * 原实现只有过账后才能「放置货位」，但过账又要求明细带 locationId，
- * 形成死锁。这里补一条草稿阶段写入 locationId 的通道。
- *
- * body: { items: [{ itemId: string|number, locationId: string|number }] }
- */
+/** Draft binding only: never modifies inventory or posted orders. */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    await requireAuth(req);
-
-    const orderId = BigInt(params.id);
-    const order = await prisma.inboundOrder.findUnique({
-      where: { id: orderId },
-      select: { id: true, status: true, warehouseId: true },
-    });
-    if (!order) {
-      return NextResponse.json({ success: false, error: '入库单不存在' }, { status: 404 });
-    }
-    if (order.status !== 'DRAFT') {
-      return NextResponse.json(
-        { success: false, error: '只有草稿状态的入库单可以修改货位' },
-        { status: 400 }
-      );
-    }
-
+    const { scope, user } = await businessAccess('stock_in:create');
+    const orderId = positiveId(params.id, '单据ID');
     const body = await req.json();
-    const items: { itemId: any; locationId: any }[] = Array.isArray(body?.items) ? body.items : [];
-    const valid = items.filter((i) => i?.itemId && i?.locationId);
-    if (!valid.length) {
-      return NextResponse.json({ success: false, error: '请至少为一个商品选择货位' }, { status: 400 });
-    }
-
-    let updated = 0;
-    for (const it of valid) {
-      const locationId = BigInt(it.locationId);
-      // 货位必须属于本单仓库
-      await assertLocationInWarehouse(prisma, locationId, order.warehouseId);
-
-      // 一个货位只能放同一种商品
-      const itemRow = await prisma.inboundItem.findFirst({
-        where: { id: BigInt(it.itemId), orderId },
-        select: { productId: true },
-      });
-      if (!itemRow) throw new Error('入库明细不存在');
-      await assertLocationAvailableFor(prisma, { locationId, productId: itemRow.productId });
-
-      const res = await prisma.inboundItem.updateMany({
-        where: { id: BigInt(it.itemId), orderId },
-        data: { locationId },
-      });
-      updated += res.count;
-    }
-
+    if (!Array.isArray(body?.items) || body.items.length === 0 || body.items.length > 200) throw new AppError('请选择 1 到 200 个明细', 400);
+    const items = body.items.map((item: any) => ({ itemId: positiveId(item?.itemId, '明细ID'), locationId: positiveId(item?.locationId, '货位ID') }));
+    if (new Set(items.map((item: any) => String(item.itemId))).size !== items.length) throw new AppError('明细ID重复', 400);
+    const updated = await prisma.$transaction(async tx => {
+      if (!await lockOrderRow(tx, 'inbound_orders', orderId)) throw new AppError('入库单不存在', 404);
+      const order = await tx.inboundOrder.findUnique({ where: { id: orderId }, include: { inboundItems: true } });
+      if (!order) throw new AppError('入库单不存在', 404);
+      await assertDocumentAllowed(scope, user, order);
+      if (order.status !== 'DRAFT') throw new AppError('只有草稿状态的入库单可以修改货位', 400);
+      const assignments = new Map<string, bigint>();
+      for (const row of order.inboundItems) {
+        const selected = items.find((item: any) => item.itemId === row.id);
+        const locationId = selected?.locationId || row.locationId;
+        if (!locationId) continue;
+        const prior = assignments.get(String(locationId));
+        if (prior !== undefined && prior !== row.productId) throw new AppError('同一货位只能分配一种商品', 400);
+        assignments.set(String(locationId), row.productId);
+      }
+      for (const item of items) {
+        const row = order.inboundItems.find(row => row.id === item.itemId);
+        if (!row) throw new AppError('入库明细不存在或不属于此单据', 400);
+        const location = await tx.location.findUnique({ where: { id: item.locationId }, include: { zone: true } });
+        if (!location || location.zone.warehouseId !== order.warehouseId || location.status !== 1 || location.zone.status !== 1) throw new AppError('货位不可用或不属于本单仓库', 400);
+        const occupied = await tx.locationStock.findFirst({ where: { locationId: item.locationId, productId: { not: row.productId }, quantity: { gt: 0 } } });
+        if (occupied) throw new AppError('货位已被其他商品占用', 400);
+        await tx.inboundItem.update({ where: { id: item.itemId }, data: { locationId: item.locationId } });
+      }
+      return items.length;
+    }, { isolationLevel: 'ReadCommitted' });
     return NextResponse.json({ success: true, data: { updated } });
   } catch (error) {
-    return authErrorResponse(error);
+    return handleApiError(error);
   }
 }

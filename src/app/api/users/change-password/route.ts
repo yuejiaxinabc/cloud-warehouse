@@ -4,6 +4,9 @@ import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { authOptions } from "@/lib/auth";
 import { serializeBigInt } from "@/lib/serialize";
+import { handleApiError } from '@/lib/errors';
+import { getSessionChecked } from '@/lib/auth-guard';
+import { writeLog, getClientIp } from '@/lib/log';
 
 /**
  * POST /api/users/change-password - 当前用户自助修改密码
@@ -12,7 +15,7 @@ import { serializeBigInt } from "@/lib/serialize";
  */
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await getSessionChecked();
     if (!session?.user) {
       return NextResponse.json({ success: false, error: "请先登录" }, { status: 401 });
     }
@@ -60,16 +63,17 @@ export async function POST(request: NextRequest) {
     const hashed = await bcrypt.hash(newPassword, 10);
     await prisma.user.update({
       where: { id: user.id },
-      data: { password: hashed, updatedAt: new Date() },
+      data: { password: hashed, sessionVersion: { increment: 1 }, updatedAt: new Date() },
     });
 
+    await writeLog({ module: 'auth', action: 'password_change', userId: user.id, refType: 'user', refId: user.id, ip: getClientIp(), content: '自助修改密码，撤销全部旧会话' });
     return NextResponse.json(serializeBigInt({
       success: true,
       code: 0,
-      message: "密码修改成功，下次登录请使用新密码",
+      message: "密码修改成功，请使用新密码重新登录",
     }));
   } catch (error: any) {
     console.error("Change password error:", error);
-    return NextResponse.json(serializeBigInt({ success: false, error: error.message }), { status: 500 });
+    return handleApiError(error);
   }
 }

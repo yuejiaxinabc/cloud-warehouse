@@ -77,6 +77,7 @@ const StockInForm: React.FC<StockInFormProps> = ({
       render: (_, record) => (
         <Select
           placeholder="选择商品"
+          aria-label="商品"
           style={{ width: '100%' }}
           showSearch
           options={[
@@ -153,6 +154,7 @@ const StockInForm: React.FC<StockInFormProps> = ({
       render: () => (
         <Select
           placeholder="选择库位"
+          aria-label="库位"
           style={{ width: '100%' }}
           options={[
             { label: 'A-01-01', value: 'loc1' },
@@ -183,6 +185,7 @@ const StockInForm: React.FC<StockInFormProps> = ({
       render: () => (
         <Select
           placeholder="质量"
+          aria-label="质量状态"
           style={{ width: '100%' }}
           options={[
             { label: '合格', value: 'qualified' },
@@ -217,8 +220,11 @@ const StockInForm: React.FC<StockInFormProps> = ({
     <div>
       {/* 表头信息 */}
       <Card title="单据信息" style={{ marginBottom: 16, borderRadius: 8 }}>
+        {/* L6：给 Form 加 name，antd 会把字段 id 生成为 stockInForm_warehouseId 等唯一值，
+            两个表单同时挂载时也不会出现重复的 id="warehouseId"（label htmlFor 因此能正确指向） */}
         <Form
           form={form}
+          name="stockInForm"
           layout="vertical"
           initialValues={initialValues}
         >

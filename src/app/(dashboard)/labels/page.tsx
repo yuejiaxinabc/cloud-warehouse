@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { Card, Table, Button, Input, Typography, message, InputNumber, Checkbox } from 'antd';
+import React, { useState, useEffect, useRef } from 'react';
+import { Card, Table, Button, Input, Typography, message, InputNumber, Checkbox, Alert, Empty } from 'antd';
 import { PrinterOutlined, SearchOutlined } from '@ant-design/icons';
 
 const { Text } = Typography;
@@ -13,7 +13,7 @@ function generateLabelHTML(product: any, index: number): string {
     <div style="width:60mm;height:40mm;border:1px dashed #ccc;padding:3mm;display:inline-block;margin:1mm;box-sizing:border-box;vertical-align:top;overflow:hidden;">
       <div style="font-weight:bold;font-size:10pt;margin-bottom:1mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${product.name || '-'}</div>
       <div style="font-size:8pt;color:#666;margin-bottom:2mm;">编码: ${product.code || '-'}</div>
-      <div style="text-align:center;margin-bottom:1mm;"><svg id="${barcodeId}"></svg></div>
+      <div style="text-align:center;margin-bottom:1mm;"><svg id="${barcodeId}" data-value="${barcode}"></svg></div>
       <div style="font-size:7pt;color:#999;text-align:center;">${barcode}</div>
     </div>
   `;
@@ -24,9 +24,12 @@ export default function LabelsPage() {
   const [selected, setSelected] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [keyword, setKeyword] = useState('');
+  const [debouncedKeyword, setDebouncedKeyword] = useState('');
+  const [loadError, setLoadError] = useState('');
   const [copies, setCopies] = useState(1);
   const [isMobile, setIsMobile] = useState(false);
   const [jsLoaded, setJsLoaded] = useState(false);
+  const requestSeq = useRef(0);
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768);
@@ -58,20 +61,48 @@ export default function LabelsPage() {
     }, 100);
   }, [jsLoaded, products, selected]);
 
-  const loadProducts = async () => {
+  const loadProducts = async (kw: string) => {
+    const seq = ++requestSeq.current;
     setLoading(true);
+    setLoadError('');
     try {
       const params = new URLSearchParams();
-      if (keyword) params.set('keyword', keyword);
-      params.set('pageSize', '500');
+      const q = kw.trim();
+      if (q) params.set('keyword', q);
+      // 后端分页上限 MAX_PAGE_SIZE=200：此前传 500 会被接口 400 拒绝，
+      // 列表恒为空、搜索不到商品、打印/全选全部不可用
+      params.set('pageSize', '200');
       const res = await fetch(`/api/products?${params}`);
       const json = await res.json();
-      if (json.success) setProducts(json.data?.items || []);
-    } catch (e) { console.error(e); }
+      if (seq !== requestSeq.current) return; // 旧请求的结果直接丢弃，避免互相覆盖
+      if (!res.ok || !json.success) {
+        const reason = res.status === 403
+          ? '没有查看商品的权限，请联系管理员开通商品查看权限'
+          : (json.error || `商品加载失败（HTTP ${res.status}）`);
+        setProducts([]);
+        setSelected([]);
+        setLoadError(reason);
+        setLoading(false);
+        return;
+      }
+      setProducts(json.data?.items || []);
+    } catch (e) {
+      if (seq !== requestSeq.current) return;
+      console.error(e);
+      setProducts([]);
+      setSelected([]);
+      setLoadError('网络异常，商品加载失败，请检查连接后重试');
+    }
     setLoading(false);
   };
 
-  useEffect(() => { loadProducts(); }, [keyword]);
+  // 搜索防抖：每敲一个字就请求一次会互相覆盖，400ms 后再查
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedKeyword(keyword), 400);
+    return () => clearTimeout(t);
+  }, [keyword]);
+
+  useEffect(() => { loadProducts(debouncedKeyword); }, [debouncedKeyword]);
 
   const handlePrint = () => {
     if (selected.length === 0) { message.warning('请先选择商品'); return; }
@@ -115,7 +146,7 @@ export default function LabelsPage() {
 </div>
 <script>
 document.querySelectorAll("svg[id^='bc-']").forEach(function(el){
-  try{JsBarcode(el, el.id.split("-")[1], {format:"CODE128",width:2,height:40,displayValue:false,margin:0});}catch(e){}
+  try{JsBarcode(el, el.getAttribute("data-value"), {format:"CODE128",width:2,height:40,displayValue:false,margin:0});}catch(e){}
 });
 <\/script>
 </body>
@@ -168,13 +199,20 @@ document.querySelectorAll("svg[id^='bc-']").forEach(function(el){
             <InputNumber min={1} max={99} value={copies} onChange={(v) => setCopies(v || 1)} style={{ width: 60 }} />
             <Text>份</Text>
           </div>
-          <Button onClick={() => setSelected(selected.length === products.length ? [] : [...products])}>
+          <Button
+            disabled={products.length === 0}
+            onClick={() => setSelected(selected.length === products.length ? [] : [...products])}
+          >
             {selected.length === products.length ? '取消全选' : '全选'}
           </Button>
           <Button type="primary" icon={<PrinterOutlined />} onClick={handlePrint} disabled={selected.length === 0}>
             打印 ({selected.length})
           </Button>
+          <Text type="secondary">共 {products.length} 个商品{debouncedKeyword.trim() ? `（关键词“${debouncedKeyword.trim()}”）` : ''}</Text>
         </div>
+        {loadError && (
+          <Alert type="error" showIcon style={{ marginTop: 12 }} message="商品加载失败" description={loadError} />
+        )}
       </Card>
       <Card>
         <Table
@@ -185,6 +223,15 @@ document.querySelectorAll("svg[id^='bc-']").forEach(function(el){
           size="small"
           pagination={{ pageSize: 20 }}
           scroll={{ x: 600 }}
+          locale={{
+            emptyText: loadError ? (
+              <Empty description="商品未能加载，原因见上方提示" />
+            ) : debouncedKeyword.trim() ? (
+              <Empty description={`没有找到与“${debouncedKeyword.trim()}”匹配的商品：请检查名称 / 编码 / 条码是否正确，或先到「商品管理」新建该商品`} />
+            ) : (
+              <Empty description="暂无商品：请先到「商品管理」新建商品" />
+            ),
+          }}
           rowSelection={{
             selectedRowKeys: selected.map((s) => s.id),
             onChange: (keys) => setSelected(products.filter((p) => keys.includes(p.id))),

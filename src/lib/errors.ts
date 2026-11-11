@@ -83,11 +83,31 @@ export class InvalidStateError extends AppError {
 }
 
 import { Prisma } from '@prisma/client';
+import { ZodError } from 'zod';
 
 /**
  * 统一错误处理 - 将异常转为 API 响应
  * 安全：不向客户端暴露数据库/ORM 内部细节
  */
+/**
+ * 安全错误文案（v1.2.1）
+ *
+ * 大量路由历史上直接 `error: error.message` 返回，把 Prisma 的表名/字段名/唯一约束名
+ * 原样吐给前端（例如 `Unique constraint warehouses_code_key`、`Unknown field items`）。
+ * 这里统一收口：业务错误照实返回，其余一律给通用文案，细节只留在服务器日志。
+ */
+export function safeErrorMessage(error: unknown, fallback = '操作失败，请稍后重试'): string {
+  if (error instanceof AppError) return error.message;
+  if (error instanceof ZodError) return error.issues[0]?.message || '参数校验失败';
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (error.code === 'P2002') return '数据已存在，请勿重复创建';
+    if (error.code === 'P2025') return '记录不存在';
+    if (error.code === 'P2021' || error.code === 'P2022') return '数据库结构未升级，请联系管理员';
+    return fallback;
+  }
+  return fallback;
+}
+
 export function handleApiError(error: unknown): Response {
   // 完整错误打印到服务器日志
   console.error('[API Error]', error);
@@ -108,14 +128,30 @@ export function handleApiError(error: unknown): Response {
   // Prisma 已知错误 → 返回通用消息（不暴露表名/字段名）
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
     const msgMap: Record<string, string> = {
+      'P2000': '字段内容超出长度限制',
       'P2002': '数据已存在，请勿重复创建',
-      'P2025': '记录不存在',
       'P2003': '关联数据不存在',
+      'P2010': '数据库查询执行失败',
+      'P2011': '必填字段不能为空',
       'P2014': '数据关系冲突',
+      'P2021': '数据表尚未初始化，请联系管理员执行数据库升级',
+      'P2022': '数据库结构未升级，请联系管理员执行数据库升级',
+      'P2025': '记录不存在',
+      'P2028': '数据库事务超时，请减少单次操作的数据量后重试',
+      'P2034': '写入冲突，请重试',
     };
+    // v1.2.1：状态码按错误语义返回，不再一律 400（P2002 冲突 409、P2025 不存在 404、
+    // P2021/P2022 表/字段缺失 503），避免前端把「表没建」当成用户输入错误。
+    const status = error.code === 'P2002' || error.code === 'P2034'
+      ? 409
+      : error.code === 'P2025'
+        ? 404
+        : error.code === 'P2021' || error.code === 'P2022'
+          ? 503
+          : 400;
     return Response.json(
-      { success: false, code: Number(error.code), error: msgMap[error.code] || '数据库操作失败' },
-      { status: error.code === 'P2002' ? 409 : 400 }
+      { success: false, code: status, error: msgMap[error.code] || '数据库操作失败' },
+      { status }
     );
   }
 
@@ -123,6 +159,41 @@ export function handleApiError(error: unknown): Response {
     return Response.json(
       { success: false, code: 400, error: '请求参数格式错误' },
       { status: 400 }
+    );
+  }
+
+  // v1.2.1：Zod 校验失败必须回 422。此前没有这个分支，所有字段校验错误都被兜底成
+  // 「服务器内部错误」，前端只能显示无关文案，测试里 6 处 500 都由此而来。
+  if (error instanceof ZodError) {
+    const fieldErrors: Record<string, string[]> = {};
+    for (const issue of error.issues) {
+      const key = issue.path.length ? issue.path.join('.') : '_';
+      (fieldErrors[key] ||= []).push(issue.message);
+    }
+    return Response.json(
+      {
+        success: false,
+        code: 422,
+        error: error.issues[0]?.message || '参数校验失败',
+        data: fieldErrors,
+      },
+      { status: 422 }
+    );
+  }
+
+  // v1.2.1：非法 JSON / 空请求体（request.json() 抛 SyntaxError）不再 500
+  if (error instanceof SyntaxError) {
+    return Response.json(
+      { success: false, code: 400, error: '请求体不是合法的 JSON' },
+      { status: 400 }
+    );
+  }
+
+  // v1.2.1：数据库不可用/未初始化要与业务错误区分，避免把运维问题伪装成 500 业务故障
+  if (error instanceof Prisma.PrismaClientInitializationError) {
+    return Response.json(
+      { success: false, code: 503, error: '数据库暂不可用，请稍后重试' },
+      { status: 503 }
     );
   }
 

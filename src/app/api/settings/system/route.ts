@@ -3,7 +3,8 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { serializeBigInt } from "@/lib/serialize";
-import { requireAdmin } from '@/lib/auth-guard';
+import { requireAdmin, getSessionChecked } from '@/lib/auth-guard';
+import { handleApiError } from '@/lib/errors';
 
 const CATEGORY = "system";
 
@@ -42,17 +43,32 @@ async function readSystemConfig(): Promise<Record<string, any>> {
   };
 }
 
-/** GET /api/settings/system - 获取系统信息（需登录） */
+/**
+ * GET /api/settings/system - 获取系统信息
+ *
+ * P1-7：v1.2.0 对未登录请求返回全量配置，连 backupSchedule/backupRetentionDays
+ * 这类运维细节一起泄露。登录页只需要公司名与联系方式，故未登录时只回这三项；
+ * 登录后（系统设置页）仍返回完整结构，保持前端字段不变。
+ */
 export async function GET() {
   try {
-    // 公开接口，未登录也可读取（如登录页展示公司名称）
     const data = await readSystemConfig();
+    const session = await getSessionChecked();
+    if (!session) {
+      // 未登录：仅回登录页展示所需的最小字段
+      return NextResponse.json(serializeBigInt({
+        success: true,
+        data: {
+          companyName: data.companyName,
+          contactPhone: data.contactPhone,
+          contactEmail: data.contactEmail,
+        },
+      }));
+    }
     return NextResponse.json(serializeBigInt({ success: true, data }));
   } catch (error: any) {
-    return NextResponse.json(
-      serializeBigInt({ success: false, error: error.message }),
-      { status: 500 }
-    );
+    // M3：统一出口，401/403/422 不再被压成 500
+    return handleApiError(error);
   }
 }
 
@@ -96,9 +112,6 @@ export async function PUT(request: NextRequest) {
       serializeBigInt({ success: true, message: "系统设置已保存" })
     );
   } catch (error: any) {
-    return NextResponse.json(
-      serializeBigInt({ success: false, error: error.message }),
-      { status: 500 }
-    );
+    return handleApiError(error);
   }
 }

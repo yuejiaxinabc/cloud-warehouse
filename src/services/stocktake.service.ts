@@ -1,7 +1,11 @@
+import { authorizeDataOperation } from '@/lib/data-scope';
+import { AppError } from '@/lib/errors';
 import { prisma } from '@/lib/prisma';
-import { generateOrderNo } from '@/lib/utils';
+import { createWithOrderNo } from '@/lib/order-no';
+import { recalcAvailable } from '@/lib/inventory-sync';
 import { NotFoundError, InvalidStateError } from '@/lib/errors';
 import { ORDER_STATUS } from '@/lib/constants';
+import { lockOrderRow } from '@/lib/order-lock';
 import { Prisma } from '@prisma/client';
 
 /**
@@ -98,8 +102,7 @@ export class StocktakeService {
     }[];
     operatorId?: number;
   }) {
-    const orderNo = await generateOrderNo('CK', prisma);
-
+    await authorizeDataOperation(data.operatorId, 'stocktake:create', data, { create: true, transfer: false });
     // 查询系统库存
     const countItems = await Promise.all(
       data.items.map(async (item) => {
@@ -121,19 +124,24 @@ export class StocktakeService {
       }),
     );
 
-    const order = await prisma.countOrder.create({
-      data: {
-        orderNo,
-        warehouseId: data.warehouseId,
-        type: data.type,
-        status: ORDER_STATUS.DRAFT,
-        remark: data.remark,
-        operatorId: data.operatorId,
-        countItems: {
-          create: countItems,
+    // P1-11：单号统一走 order-no 生成器，唯一约束冲突自动换号重试
+    const order = await createWithOrderNo(prisma, {
+      model: 'countOrder',
+      prefix: 'PD',
+      create: (orderNo) => prisma.countOrder.create({
+        data: {
+          orderNo,
+          warehouseId: data.warehouseId,
+          type: data.type,
+          status: ORDER_STATUS.DRAFT,
+          remark: data.remark,
+          operatorId: data.operatorId,
+          countItems: {
+            create: countItems,
+          },
         },
-      },
-      include: { countItems: true },
+        include: { countItems: true },
+      }),
     });
 
     return order;
@@ -142,7 +150,10 @@ export class StocktakeService {
   /**
    * 开始盘点（状态变更）
    */
-  static async start(id: number) {
+  static async start(id: number, operatorId?: number) {
+    const scopeOrder = await prisma.countOrder.findUnique({ where: { id } });
+    if (!scopeOrder) throw new NotFoundError('单据', id);
+    await authorizeDataOperation(operatorId, 'stocktake:create', scopeOrder, { transfer: false });
     const order = await prisma.countOrder.findUnique({ where: { id } });
     if (!order) throw new NotFoundError('盘点单', id);
     // 已经是盘点中，直接返回成功
@@ -162,7 +173,10 @@ export class StocktakeService {
   /**
    * 录入实盘数量
    */
-  static async enterCount(id: number, entries: { id: number; countQty: number; remark?: string }[]) {
+  static async enterCount(id: number, entries: { id: number; countQty: number; remark?: string }[], operatorId?: number) {
+    const scopeOrder = await prisma.countOrder.findUnique({ where: { id } });
+    if (!scopeOrder) throw new NotFoundError('单据', id);
+    await authorizeDataOperation(operatorId, 'stocktake:create', scopeOrder, { transfer: false });
     const order = await prisma.countOrder.findUnique({ where: { id } });
     if (!order) throw new NotFoundError('盘点单', id);
     // 如果是草稿状态，自动开始盘点
@@ -179,8 +193,9 @@ export class StocktakeService {
     // 注意：id 是 BigInt，Map 键必须统一转 Number，否则 JSON 传入的 Number id 永远匹配不到（静默跳过）
     const itemIds = entries.map(e => Number(e.id));
     const existingItems = await prisma.countItem.findMany({
-      where: { id: { in: itemIds } },
+      where: { orderId: id, id: { in: itemIds } },
     });
+    if (existingItems.length !== new Set(itemIds).size) throw new AppError('盘点明细不属于当前单据', 403);
     const itemMap = new Map(existingItems.map(i => [Number(i.id), i]));
 
     // 批量更新实盘数量和差异
@@ -190,7 +205,7 @@ export class StocktakeService {
       const systemQty = Number(item.systemQty || 0);
       const diff = entry.countQty - systemQty;
       await prisma.countItem.update({
-        where: { id: entry.id },
+        where: { id: entry.id, orderId: id },
         data: {
           countQty: new Prisma.Decimal(entry.countQty),
           diffQty: new Prisma.Decimal(diff),
@@ -206,7 +221,15 @@ export class StocktakeService {
    * 盘点结算（生成调整单，更新库存）
    */
   static async settle(id: number, operatorId?: number, ip?: string) {
+    const scopeOrder = await prisma.countOrder.findUnique({ where: { id } });
+    if (!scopeOrder) throw new NotFoundError('单据', id);
+    await authorizeDataOperation(operatorId, 'stocktake:settle', scopeOrder, { transfer: false });
     return prisma.$transaction(async (tx) => {
+      // P0-1：结算前先锁住盘点单行，并发/重复点击时只有第一个事务能继续，
+      // 第二个读到的状态已是 SETTLED，直接被状态机拒绝，不会重复调整库存。
+      const locked = await lockOrderRow(tx, 'count_orders', id);
+      if (!locked) throw new NotFoundError('盘点单', id);
+
       const order = await tx.countOrder.findUnique({
         where: { id },
         include: { countItems: true },
@@ -272,6 +295,12 @@ export class StocktakeService {
             },
           });
         }
+
+        // P1-2：盘点调整改了 onHand，同事务重算 available
+        await recalcAvailable(tx, {
+          productId: item.productId,
+          warehouseId: order.warehouseId,
+        });
 
         // 写库存流水
         await tx.inventoryTransaction.create({

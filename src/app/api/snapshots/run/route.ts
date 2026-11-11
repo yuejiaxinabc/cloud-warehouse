@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth-guard';
 import { writeLog, getClientIp } from '@/lib/log';
+import { handleApiError } from '@/lib/errors';
 
 /** POST /api/snapshots/run  —— 生成某日库存快照（幂等） */
 export async function POST(req: NextRequest) {
@@ -46,6 +47,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, data: { date: dateStr, written } });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message || '生成快照失败' }, { status: 500 });
+    return handleApiError(error);
   }
 }

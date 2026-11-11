@@ -1,6 +1,11 @@
+import { authorizeDataOperation } from '@/lib/data-scope';
 import { prisma } from '@/lib/prisma';
-import { generateOrderNo } from '@/lib/utils';
-import { NotFoundError, InvalidStateError, AppError } from '@/lib/errors';
+import { createWithOrderNo } from '@/lib/order-no';
+import { recalcAvailable } from '@/lib/inventory-sync';
+import { NotFoundError, InvalidStateError, AppError, ConflictError } from '@/lib/errors';
+// H1/H2 修复：数量与金额防线、单据行排他锁
+import { assertPositiveQty, assertNonNegativePrice } from '@/lib/qty-guard';
+import { lockOrderRow } from '@/lib/order-lock';
 import { ORDER_STATUS } from '@/lib/constants';
 import { Prisma } from '@prisma/client';
 import { syncLocationStock, assertLocationInWarehouse } from '@/lib/location-binding';
@@ -116,6 +121,7 @@ export class StockInService {
     remark?: string;
     items: {
       productId: number;
+      locationId?: number;
       skuVariantId?: number;
       lotNumber?: string;
       quantity: number;
@@ -124,8 +130,7 @@ export class StockInService {
     }[];
     operatorId?: number;
   }) {
-    const orderNo = await generateOrderNo('IN', prisma);
-
+    await authorizeDataOperation(data.operatorId, 'stock_in:create', data, { create: true, transfer: false });
     // 计算总金额和总数量
     let totalAmount = 0;
     let totalQty = 0;
@@ -135,6 +140,7 @@ export class StockInService {
       totalQty += item.quantity;
       return {
         productId: item.productId,
+        locationId: item.locationId,
         skuVariantId: item.skuVariantId,
         lotNumber: item.lotNumber,
         quantity: new Prisma.Decimal(item.quantity),
@@ -144,24 +150,29 @@ export class StockInService {
       };
     });
 
-    const order = await prisma.inboundOrder.create({
-      data: {
-        orderNo,
-        type: data.type,
-        warehouseId: data.warehouseId,
-        supplierId: data.supplierId,
-        status: ORDER_STATUS.DRAFT,
-        totalAmount: new Prisma.Decimal(totalAmount),
-        totalQty: new Prisma.Decimal(totalQty),
-        remark: data.remark,
-        operatorId: data.operatorId,
-        inboundItems: {
-          create: itemsData,
+    // P1-11：单号统一走 order-no 生成器，唯一约束冲突自动换号重试（原 count+1 并发必撞号）
+    const order = await createWithOrderNo(prisma, {
+      model: 'inboundOrder',
+      prefix: 'IN',
+      create: (orderNo) => prisma.inboundOrder.create({
+        data: {
+          orderNo,
+          type: data.type,
+          warehouseId: data.warehouseId,
+          supplierId: data.supplierId,
+          status: ORDER_STATUS.DRAFT,
+          totalAmount: new Prisma.Decimal(totalAmount),
+          totalQty: new Prisma.Decimal(totalQty),
+          remark: data.remark,
+          operatorId: data.operatorId,
+          inboundItems: {
+            create: itemsData,
+          },
         },
-      },
-      include: {
-        inboundItems: true,
-      },
+        include: {
+          inboundItems: true,
+        },
+      }),
     });
 
     return order;
@@ -172,8 +183,15 @@ export class StockInService {
    * 事务：写流水 + 更新库存 + 更新批次 + 审计日志
    */
   static async post(id: number, operatorId?: number, ip?: string) {
+    const scopeOrder = await prisma.inboundOrder.findUnique({ where: { id } });
+    if (!scopeOrder) throw new NotFoundError('单据', id);
+    await authorizeDataOperation(operatorId, 'stock_in:post', scopeOrder, { transfer: false });
     return prisma.$transaction(async (tx) => {
-      // 1. 查询并锁定入库单
+      // 1. 先对单据行加排他锁（H2）：并发第二次过账会阻塞在这里，
+      // 待第一条提交后再读即发现 status=POSTED，从而被下面的状态校验拒绝。
+      const locked = await lockOrderRow(tx, 'inbound_orders', id);
+      if (!locked) throw new NotFoundError('入库单', id);
+
       const order = await tx.inboundOrder.findUnique({
         where: { id },
         include: {
@@ -191,9 +209,14 @@ export class StockInService {
       const now = new Date();
 
       // 2. 逐项处理入库
-      for (const item of order.inboundItems) {
-        const qty = Number(item.quantity);
-        const costPrice = item.costPrice ? Number(item.costPrice) : 0;
+      for (const [itemIndex, item] of order.inboundItems.entries()) {
+        // H1 修复：过账前再校验一次符号与量级。
+        // 历史草稿可能是修复前建的（含负数），不能被「过账」这一步放行。
+        const qty = assertPositiveQty(item.quantity, '第 ' + (itemIndex + 1) + ' 行入库数量');
+        const costPrice =
+          item.costPrice === null || item.costPrice === undefined
+            ? 0
+            : assertNonNegativePrice(item.costPrice, '第 ' + (itemIndex + 1) + ' 行单价');
 
         // ===== 批次与效期校验（v1.2.0）=====
         // 有保质期的商品（shelfLifeDays > 0）入库必须录批次号 + 生产日期，
@@ -274,14 +297,65 @@ export class StockInService {
         // 一个货位只能放同一种商品，换品种必须换货位
         await assertLocationAvailableFor(tx, { locationId: boundLocationId, productId: item.productId });
 
+        // B5：货位容量校验。capacity 未配置（0/null）视为不限量，配置了就按量拦。
+        // 之前 capacity=10 的货位也能一次入 1e9 件，货架地图与库容统计全部失真。
+        const locationMeta = await tx.location.findUnique({
+          where: { id: boundLocationId },
+          select: { capacity: true, code: true },
+        });
+        const capacity = locationMeta?.capacity ? Number(locationMeta.capacity) : 0;
+        if (capacity > 0) {
+          const occupied = await tx.locationStock.aggregate({
+            where: { locationId: boundLocationId },
+            _sum: { quantity: true },
+          });
+          const used = Number(occupied._sum.quantity || 0);
+          if (used + qty > capacity) {
+            throw new AppError(
+              '货位「' + (locationMeta?.code || rawLocationId) + '」容量不足：容量 ' + capacity +
+                '，已用 ' + used + '，本次入库 ' + qty,
+              400
+            );
+          }
+        }
+
         let invId: bigint;
         if (existingInv) {
-          // 移动加权平均法计算新成本
+          // 移动加权平均法计算新成本（H1 连锁修复）
+          //
+          // 旧公式在 oldQty < 0 时会把负数乘进分子：实测负库存 -5 再入 1e9 件，
+          // 成本被算成 2,250,000,004.375，且零库存态不再重算 → 该商品金额永久失真。
+          // 现在的规则：
+          //  - 在手为负（历史脏数据）→ 不套公式，直接用本次入库价重建基准成本，并留告警；
+          //  - 在手为 0 → 同样以本次入库价为基准（等价于首次入库，公式本身也退化到此）；
+          //  - 其余情况才走加权平均。
           const oldQty = Number(existingInv.onHand);
           const oldCost = existingInv.avgCost ? Number(existingInv.avgCost) : 0;
-          const newAvgCost = costPrice > 0 && (oldQty + qty) > 0
-            ? (oldQty * oldCost + qty * costPrice) / (oldQty + qty)
-            : oldCost;
+          let newAvgCost = oldCost;
+          let costWarning: string | null = null;
+
+          if (oldQty < 0) {
+            newAvgCost = costPrice > 0 ? costPrice : oldCost;
+            costWarning =
+              '负库存在手重建成本：商品 ' + item.productId + ' 原 onHand=' + oldQty + '，基准成本重置为 ' + newAvgCost;
+          } else if (qty > 0) {
+            newAvgCost = costPrice > 0 ? (oldQty * oldCost + qty * costPrice) / (oldQty + qty) : oldCost;
+          }
+
+          if (costWarning) {
+            console.warn('[stock-in] ' + costWarning);
+            await tx.operationLog.create({
+              data: {
+                userId: operatorId,
+                module: 'INVENTORY',
+                action: 'COST_REBUILD',
+                refType: 'INBOUND',
+                refId: order.id,
+                content: costWarning,
+                ip: ip || null,
+              },
+            });
+          }
 
           await tx.inventory.update({
             where: { id: existingInv.id },
@@ -308,6 +382,9 @@ export class StockInService {
           });
           invId = created.id;
         }
+
+        // P1-2：过账改了 onHand，同事务重算 available（否则入库后可用量仍停在旧值）
+        await recalcAvailable(tx, { id: invId });
 
         // 货位明细：货架地图的唯一数据源，必须同步写
         await syncLocationStock(tx, {
@@ -427,14 +504,17 @@ export class StockInService {
         });
       }
 
-      // 3. 更新入库单状态
-      await tx.inboundOrder.update({
-        where: { id },
+      // 3. 更新入库单状态（H2 第二道闸：条件更新，影响行数 0 说明已被别人过账）
+      const claimed = await tx.inboundOrder.updateMany({
+        where: { id, status: ORDER_STATUS.DRAFT },
         data: {
           status: ORDER_STATUS.POSTED,
           postedAt: now,
         },
       });
+      if (claimed.count === 0) {
+        throw new ConflictError('该入库单已被过账或状态已变更，请刷新后查看');
+      }
 
       // 4. 审计日志
       await tx.operationLog.create({

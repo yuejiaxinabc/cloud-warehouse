@@ -2,8 +2,8 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  App, Avatar, Button, Card, Col, Drawer, Empty, Form, Input, InputNumber,
-  List, Modal, Popconfirm, Row, Select, Space, Table, Tag, Tooltip, Typography, Upload,
+  Alert, App, Avatar, Button, Card, Col, Drawer, Empty, Form, Input, InputNumber,
+  List, Modal, Popconfirm, Row, Select, Space, Table, Tag, Typography, Upload,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -359,14 +359,14 @@ export default function ProductsPage() {
     {
       title: '',
       key: 'action',
-      width: 132,
+      width: 210,
       align: 'right',
       render: (_, r) => (
         <Space size={0}>
-          <Tooltip title="详情与价格记录"><Button type="text" size="small" icon={<HistoryOutlined />} onClick={() => openDetail(r)} /></Tooltip>
-          <Tooltip title="编辑"><Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(r)} /></Tooltip>
+          <Button type="link" size="small" icon={<HistoryOutlined />} onClick={() => openDetail(r)}>详情</Button>
+          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>编辑</Button>
           <Popconfirm title="删除该商品？" description="库存不为 0 时无法删除" okText="删除" cancelText="取消" onConfirm={() => remove(r.id)}>
-            <Tooltip title="删除"><Button type="text" size="small" danger icon={<DeleteOutlined />} /></Tooltip>
+            <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
           </Popconfirm>
         </Space>
       ),
@@ -387,6 +387,24 @@ export default function ProductsPage() {
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建商品</Button>
         </Space>
       </div>
+
+      {/* 商品是主数据，可以不依赖仓库存在；但用户第一次进来没有仓库时会疑惑「商品怎么凭空来了」。
+          这里给一句解释与去路，而不是拦住建档（主数据与库存本就解耦）。 */}
+      {warehouses.length === 0 && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="还没有建仓库，商品可以先建档，但库存不会产生"
+          description={
+            <span>
+              商品属于主数据（编码、规格、单位、分类），与仓库无关，所以现在可以正常新建；
+              在库量、锁定量、货位这些要到「仓库管理」建好仓库、并在入库时才有值。
+              <a href="/warehouse" style={{ marginLeft: 6 }}>去建仓库 →</a>
+            </span>
+          }
+        />
+      )}
 
       <Card styles={{ body: { padding: 0 } }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', padding: '14px 16px' }}>
@@ -532,7 +550,7 @@ export default function ProductsPage() {
                 name="shelfLifeDays"
                 label="保质期（天）"
                 tooltip="填了保质期，入库时会强制录入批次号 + 生产日期，出库按先到期先出（FEFO）"
-                extra="0 或留空表示不管效期"
+                extra="留空表示不管理效期"
               >
                 <InputNumber style={{ width: '100%' }} min={0} placeholder="如 30" addonAfter="天" />
               </Form.Item>

@@ -1,7 +1,27 @@
+import { getDataScope, withWarehouseScope, withDocumentScope, assertWarehouseAllowed, assertDocumentAllowed, type DataScope } from '@/lib/data-scope';
+import { requireAuth, requirePermission } from '@/lib/auth-guard';
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, authErrorResponse } from '@/lib/auth-guard';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
+import { handleApiError } from '@/lib/errors';
+// v1.2.3 数据权限：库存分析四类报表同样按角色数据范围收敛仓库
+
+/**
+ * v1.2.3 数据权限：从鉴权结果解析当前用户的数据范围
+ * API Token 调用没有角色/组织信息，roles 为空时 getDataScope 会落到最严的「仅本人经手」。
+ */
+async function resolveScope(auth: Awaited<ReturnType<typeof requireAuth>>): Promise<DataScope> {
+  return getDataScope(auth.user);
+}
+
+/** v1.2.3 数据权限：返回体里的作用域摘要（warehouseCount = -1 表示不限仓库） */
+function scopeSummary(scope: DataScope) {
+  return {
+    mode: scope.mode,
+    label: scope.label,
+    warehouseCount: scope.warehouseIds === null ? -1 : scope.warehouseIds.length,
+  };
+}
 
 /**
  * GET /api/inventory/analysis?type=recon|stale|abc|replenish
@@ -14,14 +34,19 @@ import { serializeBigInt } from '@/lib/serialize';
  */
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(req);
+    const auth = await requireAuth(req);
+    await requirePermission('inventory:view', auth);
+      // v1.2.3 数据权限：先取作用域，再按仓库收敛每一个报表查询
+    const scope = await resolveScope(auth);
 
     const { searchParams } = new URL(req.url);
     const type = searchParams.get('type') || 'recon';
     const days = Math.max(1, parseInt(searchParams.get('days') || '90', 10));
 
     if (type === 'recon') {
+      // v1.2.3 数据权限：库存余额与流水累计都只统计作用域内仓库
       const inventories = await prisma.inventory.findMany({
+        where: withWarehouseScope({}, scope),
         include: {
           product: { select: { code: true, name: true } },
           warehouse: { select: { name: true } },
@@ -30,6 +55,7 @@ export async function GET(req: NextRequest) {
 
       const sums = await prisma.inventoryTransaction.groupBy({
         by: ['productId', 'warehouseId'],
+        where: withWarehouseScope({}, scope),
         _sum: { quantity: true },
         _count: { id: true },
       });
@@ -69,6 +95,7 @@ export async function GET(req: NextRequest) {
           mismatchCount: mismatch.length,
           noTxnCount: noTxn.length,
           rows: [...mismatch, ...noTxn].slice(0, 500),
+          scope: scopeSummary(scope),
         },
       }));
     }
@@ -76,7 +103,8 @@ export async function GET(req: NextRequest) {
     if (type === 'stale') {
       const since = new Date(Date.now() - days * 86400000);
       const inventories = await prisma.inventory.findMany({
-        where: { onHand: { gt: 0 } },
+        // v1.2.3 数据权限：呆滞料只看作用域内仓库的库存
+        where: withWarehouseScope({ onHand: { gt: 0 } }, scope),
         include: {
           product: { select: { code: true, name: true, safetyStock: true } },
           warehouse: { select: { name: true } },
@@ -85,6 +113,8 @@ export async function GET(req: NextRequest) {
 
       const lastTxns = await prisma.inventoryTransaction.groupBy({
         by: ['productId', 'warehouseId'],
+        // v1.2.3 数据权限：最近动销时间同样只取作用域内仓库
+        where: withWarehouseScope({}, scope),
         _max: { txnTime: true },
       });
       const lastMap = new Map<string, Date | null>();
@@ -121,6 +151,7 @@ export async function GET(req: NextRequest) {
           count: rows.length,
           amount: Number(rows.reduce((s, r) => s + r.amount, 0).toFixed(2)),
           rows: rows.slice(0, 500),
+          scope: scopeSummary(scope),
         },
       }));
     }
@@ -128,7 +159,8 @@ export async function GET(req: NextRequest) {
     if (type === 'abc') {
       const since = new Date(Date.now() - 365 * 86400000);
       const outbound = await prisma.inventoryTransaction.findMany({
-        where: { txnType: 'OUTBOUND', txnTime: { gte: since } },
+        // v1.2.3 数据权限：ABC 按出库金额算，出库流水只取作用域内仓库
+        where: withWarehouseScope({ txnType: 'OUTBOUND', txnTime: { gte: since } }, scope),
         select: { productId: true, quantity: true, costPrice: true },
       });
 
@@ -170,12 +202,14 @@ export async function GET(req: NextRequest) {
 
       return NextResponse.json(serializeBigInt({
         success: true,
-        data: { totalAmount: Number(total.toFixed(2)), count: rows.length, summary, rows: rows.slice(0, 500) },
+        data: { totalAmount: Number(total.toFixed(2)), count: rows.length, summary, rows: rows.slice(0, 500), scope: scopeSummary(scope) },
       }));
     }
 
     // replenish
     const inventories = await prisma.inventory.findMany({
+      // v1.2.3 数据权限：补货建议只看作用域内仓库的库存
+      where: withWarehouseScope({}, scope),
       include: {
         product: { select: { code: true, name: true, safetyStock: true, maxStock: true, defaultCost: true } },
         warehouse: { select: { name: true } },
@@ -207,9 +241,9 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json(serializeBigInt({
       success: true,
-      data: { count: rows.length, rows: (rows as any[]).slice(0, 500) },
+      data: { count: rows.length, rows: (rows as any[]).slice(0, 500), scope: scopeSummary(scope) },
     }));
   } catch (error) {
-    return authErrorResponse(error);
+    return handleApiError(error);
   }
 }

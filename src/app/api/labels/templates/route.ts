@@ -1,15 +1,15 @@
 import { NextRequest } from 'next/server';
-import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { successResponse, errorResponse, handleApiError } from '@/lib/errors';
+import { getSessionChecked } from '@/lib/auth-guard';
 
 /**
  * GET /api/labels/templates - 标签模板列表
  */
 export async function GET(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await getSessionChecked();
     if (!session) return errorResponse('请先登录', 401);
 
     const { searchParams } = new URL(request.url);

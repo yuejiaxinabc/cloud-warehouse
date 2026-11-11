@@ -1,7 +1,11 @@
+import { authorizeDataOperation } from '@/lib/data-scope';
 import { prisma } from '@/lib/prisma';
-import { generateOrderNo } from '@/lib/utils';
-import { NotFoundError, InvalidStateError, InsufficientStockError, ForbiddenError } from '@/lib/errors';
+import { createWithOrderNo } from '@/lib/order-no';
+import { recalcAvailable } from '@/lib/inventory-sync';
+import { syncLocationStock, assertLocationInWarehouse } from '@/lib/location-binding';
+import { NotFoundError, InvalidStateError, InsufficientStockError, AppError, ForbiddenError } from '@/lib/errors';
 import { ORDER_STATUS } from '@/lib/constants';
+import { deductOnHand } from '@/lib/stock-atomic';
 import { Prisma } from '@prisma/client';
 
 /**
@@ -142,6 +146,7 @@ export class TransferService {
     items: { productId: number; skuVariantId?: number; quantity: number; remark?: string }[];
     operatorId?: number;
   }) {
+    await authorizeDataOperation(data.operatorId, 'transfer:create', data, { create: true, transfer: true });
     if (data.fromWhId === data.toWhId) {
       throw new Error('源仓库和目标仓库不能相同');
     }
@@ -157,26 +162,30 @@ export class TransferService {
     if (!fromWh) throw new NotFoundError('源仓库', data.fromWhId);
     if (!toWh) throw new NotFoundError('目标仓库', data.toWhId);
 
-    const orderNo = await generateOrderNo('TR', prisma);
-
-    const order = await prisma.transferOrder.create({
-      data: {
-        orderNo,
-        fromWhId: data.fromWhId,
-        toWhId: data.toWhId,
-        status: ORDER_STATUS.DRAFT,
-        remark: data.remark,
-        operatorId: data.operatorId,
-        transferItems: {
-          create: data.items.map(item => ({
-            productId: item.productId,
-            skuVariantId: item.skuVariantId,
-            quantity: new Prisma.Decimal(item.quantity),
-            remark: item.remark,
-          })),
+    // P1-11：单号改走 order-no 生成器，唯一约束冲突自动换号重试（原 count+1 并发必撞号）
+    const includeRelations = this.includeRelations;
+    const order = await createWithOrderNo(prisma, {
+      model: 'transferOrder',
+      prefix: 'TR',
+      create: (orderNo) => prisma.transferOrder.create({
+        data: {
+          orderNo,
+          fromWhId: data.fromWhId,
+          toWhId: data.toWhId,
+          status: ORDER_STATUS.DRAFT,
+          remark: data.remark,
+          operatorId: data.operatorId,
+          transferItems: {
+            create: data.items.map(item => ({
+              productId: item.productId,
+              skuVariantId: item.skuVariantId,
+              quantity: new Prisma.Decimal(item.quantity),
+              remark: item.remark,
+            })),
+          },
         },
-      },
-      include: this.includeRelations,
+        include: includeRelations,
+      }),
     });
 
     return this.serialize(order);
@@ -188,6 +197,9 @@ export class TransferService {
    * 发出调拨（从源仓库扣减库存）
    */
   static async send(id: number, operatorId?: number, ip?: string) {
+    const scopeOrder = await prisma.transferOrder.findUnique({ where: { id } });
+    if (!scopeOrder) throw new NotFoundError('单据', id);
+    await authorizeDataOperation(operatorId, 'transfer:approve', scopeOrder, { transfer: true });
     return prisma.$transaction(async (tx) => {
       const order = await tx.transferOrder.findUnique({
         where: { id },
@@ -220,21 +232,23 @@ export class TransferService {
           throw new InsufficientStockError(product?.name || `商品(${item.productId})`, qty, 0);
         }
 
-        const available = Number(inv.onHand) - Number(inv.locked);
+        // v1.2.4 B：报错里展示的可用量不为负（比较逻辑不变）
+        const available = Math.max(0, Number(inv.onHand) - Number(inv.locked));
         if (available < qty) {
           const product = await tx.product.findUnique({ where: { id: item.productId } });
           throw new InsufficientStockError(product?.name || `商品(${item.productId})`, qty, available);
         }
 
-        // 从源仓库扣减库存
+        // 从源仓库扣减库存（P0-1：原子条件扣减，并发下不会超卖、也不会丢更新）
         const beforeQty = Number(inv.onHand);
-        await tx.inventory.update({
-          where: { id: inv.id },
-          data: {
-            onHand: { decrement: qty },
-            version: { increment: 1 },
-          },
-        });
+        const stockOk = await deductOnHand(tx, inv.id, qty);
+        if (stockOk === 0) {
+          const product = await tx.product.findUnique({ where: { id: item.productId } });
+          throw new InsufficientStockError(product?.name || `商品(${item.productId})`, qty, 0);
+        }
+
+        // P1-2：调拨发出扣减了 onHand，同一事务内重算 available，避免可用量停在旧值
+        await recalcAvailable(tx, { id: inv.id });
 
         // 扣减货位库存（按先进先出）
         let remainQty = qty;
@@ -302,14 +316,45 @@ export class TransferService {
   }
 
   /**
+   * 在目标仓库里挑一个空闲货位（启用、且没有任何商品占用）。
+   * P1-1：找不到就抛 400 要求接收人指定货位 —— 绝不静默不写货位。
+   */
+  private static async pickEmptyLocationId(tx: any, warehouseId: bigint): Promise<bigint> {
+    const occupied = await tx.locationStock.findMany({
+      where: { warehouseId, quantity: { gt: 0 } },
+      select: { locationId: true },
+      distinct: ['locationId'],
+    });
+    const occupiedIds = occupied.map((ls: any) => ls.locationId);
+
+    const defaultLoc = await tx.location.findFirst({
+      where: {
+        zone: { warehouseId },
+        status: 1,
+        ...(occupiedIds.length > 0 ? { id: { notIn: occupiedIds } } : {}),
+      },
+      orderBy: { id: 'asc' },
+      select: { id: true },
+    });
+
+    if (!defaultLoc) {
+      throw new AppError('目标仓库无可用货位，请在接收时指定货位', 400);
+    }
+    return defaultLoc.id;
+  }
+
+  /**
    * 接收调拨（目标仓库增加库存）
    */
   static async receive(
     id: number,
     operatorId?: number,
-    ip: string | undefined,
+    ip?: string,
     locations?: { productId: number; locationId: number; boxId?: number; quantity: number }[]
   ) {
+    const scopeOrder = await prisma.transferOrder.findUnique({ where: { id } });
+    if (!scopeOrder) throw new NotFoundError('单据', id);
+    await authorizeDataOperation(operatorId, 'transfer:approve', scopeOrder, { transfer: true });
     return prisma.$transaction(async (tx) => {
       const order = await tx.transferOrder.findUnique({
         where: { id },
@@ -352,6 +397,40 @@ export class TransferService {
         });
         const sourceCost = sourceInv?.avgCost ? Number(sourceInv.avgCost) : null;
 
+        // P1-1：先把「这批货落到哪个货位」定下来，再写库存。
+        // 原来接收只写 location_stocks、从不回写 inventory.locationId，
+        // 结果「有库存无货位」——货架地图、导出、再次出库全都找不到这批货。
+        const matchedLoc = locations && locations.length > 0
+          ? locations.find(l => Number(l.productId) === Number(item.productId))
+          : null;
+
+        let targetLocationId: bigint;
+        let targetBoxId: bigint | null = null;
+
+        if (matchedLoc) {
+          // 接收人显式指定货位：顺带校验货位确实属于目标仓库，防止 A 仓的货塞进 B 仓货位
+          targetLocationId = BigInt(matchedLoc.locationId);
+          // assertLocationInWarehouse 抛的是裸 Error（会被兜底成 500），这里转成可读的 400
+          try {
+            await assertLocationInWarehouse(tx, targetLocationId, order.toWhId);
+          } catch (e: any) {
+            throw new AppError(e?.message || '指定的货位不属于目标仓库', 400);
+          }
+          targetBoxId = matchedLoc.boxId ? BigInt(matchedLoc.boxId) : null;
+        } else if (existingInv) {
+          // 未指定：优先并入该商品在目标仓库已有的货位
+          const existingLocStock = await tx.locationStock.findFirst({
+            where: { inventoryId: existingInv.id, productId: item.productId, warehouseId: order.toWhId },
+            orderBy: { updatedAt: 'desc' },
+          });
+          targetLocationId = existingLocStock
+            ? existingLocStock.locationId
+            : await this.pickEmptyLocationId(tx, order.toWhId);
+          targetBoxId = existingLocStock?.boxId ?? null;
+        } else {
+          targetLocationId = await this.pickEmptyLocationId(tx, order.toWhId);
+        }
+
         if (existingInv) {
           beforeQty = Number(existingInv.onHand);
           // 移动加权平均计算新成本
@@ -366,6 +445,7 @@ export class TransferService {
               onHand: { increment: qty },
               avgCost: newAvgCost,
               version: { increment: 1 },
+              locationId: targetLocationId, // P1-1：已有库存也要回写货位
             },
           });
           invId = existingInv.id;
@@ -376,6 +456,7 @@ export class TransferService {
               productId: item.productId,
               warehouseId: order.toWhId,
               skuVariantId: item.skuVariantId || 0,
+              locationId: targetLocationId, // P1-1：新建库存同样必须带货位
               onHand: qty,
               avgCost: sourceCost || 0,
               locked: 0,
@@ -384,6 +465,9 @@ export class TransferService {
           });
           invId = newInv.id;
         }
+
+        // P1-2：调拨接收改了 onHand，同一事务内重算 available
+        await recalcAvailable(tx, { id: invId });
 
         // 写流水（调拨入）
         await tx.inventoryTransaction.create({
@@ -404,63 +488,15 @@ export class TransferService {
           },
         });
 
-        // 分配货位
-        const matchedLoc = locations && locations.length > 0
-          ? locations.find(l => Number(l.productId) === Number(item.productId))
-          : null;
-
-        if (matchedLoc) {
-          // 用户指定了货位
-          await tx.locationStock.create({
-            data: {
-              inventoryId: invId,
-              productId: item.productId,
-              warehouseId: order.toWhId,
-              locationId: Number(matchedLoc.locationId),
-              boxId: matchedLoc.boxId ? Number(matchedLoc.boxId) : null,
-              quantity: qty,
-            },
-          });
-        } else {
-          // 未指定货位：优先加到该商品在目标仓库已有的货位
-          const existingLocStock = await tx.locationStock.findFirst({
-            where: { inventoryId: invId, productId: item.productId, warehouseId: order.toWhId },
-            orderBy: { updatedAt: 'desc' },
-          });
-          if (existingLocStock) {
-            await tx.locationStock.update({
-              where: { id: existingLocStock.id },
-              data: { quantity: { increment: qty } },
-            });
-          } else {
-            // 没有已有货位，找一个空货位（没有其他商品的）
-            const occupiedLocIds = await tx.locationStock.findMany({
-              where: { warehouseId: order.toWhId },
-              select: { locationId: true },
-              distinct: ['locationId'],
-            });
-            const occupiedIds = occupiedLocIds.map((ls: any) => ls.locationId);
-            const defaultLoc = await tx.location.findFirst({
-              where: {
-                zone: { warehouseId: order.toWhId },
-                status: 1,
-                id: { notIn: occupiedIds.length > 0 ? occupiedIds : [0n] },
-              },
-              orderBy: { id: 'asc' },
-            });
-            if (defaultLoc) {
-              await tx.locationStock.create({
-                data: {
-                  inventoryId: invId,
-                  productId: item.productId,
-                  warehouseId: order.toWhId,
-                  locationId: defaultLoc.id,
-                  quantity: qty,
-                },
-              });
-            }
-          }
-        }
+        // 货位明细：货架地图的唯一数据源，必须与 inventory.locationId 一起落库（P1-1）
+        await syncLocationStock(tx, {
+          inventoryId: invId,
+          productId: item.productId,
+          warehouseId: order.toWhId,
+          locationId: targetLocationId,
+          quantity: qty,
+          boxId: targetBoxId,
+        });
 
         // 更新接收数量
         await tx.transferItem.update({
@@ -496,6 +532,9 @@ export class TransferService {
    * 取消调拨单（仅草稿状态可取消）
    */
   static async cancel(id: number, operatorId?: number, ip?: string) {
+    const scopeOrder = await prisma.transferOrder.findUnique({ where: { id } });
+    if (!scopeOrder) throw new NotFoundError('单据', id);
+    await authorizeDataOperation(operatorId, 'transfer:create', scopeOrder, { transfer: true });
     const order = await prisma.transferOrder.findUnique({ where: { id } });
     if (!order) throw new NotFoundError('调拨单', id);
     if (order.status !== ORDER_STATUS.DRAFT) {
@@ -526,10 +565,13 @@ export class TransferService {
    * 删除调拨单（仅草稿/已取消状态可删除）
    */
   static async remove(id: number, operatorId?: number, ip?: string) {
+    const scopeOrder = await prisma.transferOrder.findUnique({ where: { id } });
+    if (!scopeOrder) throw new NotFoundError('单据', id);
+    await authorizeDataOperation(operatorId, 'transfer:create', scopeOrder, { transfer: true });
     const order = await prisma.transferOrder.findUnique({ where: { id } });
     if (!order) throw new NotFoundError('调拨单', id);
 
-    const allowedStatuses = [ORDER_STATUS.DRAFT, ORDER_STATUS.CANCELLED];
+    const allowedStatuses: string[] = [ORDER_STATUS.DRAFT, ORDER_STATUS.CANCELLED];
     if (!allowedStatuses.includes(order.status)) {
       throw new InvalidStateError(order.status, '删除');
     }

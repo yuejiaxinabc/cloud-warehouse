@@ -1,10 +1,9 @@
 import { NextRequest } from 'next/server';
-import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { BomService } from '@/services/bom.service';
 import { createBomSchema, paginationSchema } from '@/lib/validators';
 import { successResponse, errorResponse, handleApiError } from '@/lib/errors';
-import { requireAuth } from '@/lib/auth-guard';
+import { requireAuth, getSessionChecked } from '@/lib/auth-guard';
 
 /**
  * GET /api/bom - BOM 列表
@@ -12,7 +11,7 @@ import { requireAuth } from '@/lib/auth-guard';
 export async function GET(request: NextRequest) {
     await requireAuth(request);
   try {
-    const session = await getServerSession(authOptions);
+    const session = await getSessionChecked();
     if (!session) return errorResponse('请先登录', 401);
 
     const { searchParams } = new URL(request.url);
@@ -61,7 +60,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
     await requireAuth(request);
   try {
-    const session = await getServerSession(authOptions);
+    const session = await getSessionChecked();
     if (!session) return errorResponse('请先登录', 401);
 
     const body = await request.json();

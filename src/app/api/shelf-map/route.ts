@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authOptions } from '@/lib/auth';
 import { prisma } from "@/lib/prisma";
 import { serializeBigInt } from "@/lib/serialize";
+import { safeErrorMessage } from '@/lib/errors';
 
 export async function GET(req: NextRequest) {
   try {
@@ -160,7 +161,7 @@ export async function GET(req: NextRequest) {
   } catch (error: any) {
     console.error("Shelf map API error:", error);
     return NextResponse.json(
-      serializeBigInt({ success: false, error: error.message }),
+      serializeBigInt({ success: false, error: safeErrorMessage(error) }),
       { status: 500 }
     );
   }

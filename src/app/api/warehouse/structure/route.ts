@@ -1,3 +1,5 @@
+import { handleApiError } from '@/lib/errors';
+import { businessAccess, assertWarehouseAllowed, withWarehouseScope, checkZone, checkLocation } from '@/app/api/warehouse/access';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
@@ -8,13 +10,15 @@ import { serializeBigInt } from '@/lib/serialize';
  */
 export async function GET(req: NextRequest) {
   try {
+    const { scope } = await businessAccess();
     const { searchParams } = new URL(req.url);
     const warehouseId = searchParams.get('warehouseId');
     if (!warehouseId) {
       return NextResponse.json({ success: false, error: '缺少仓库ID' }, { status: 400 });
     }
 
-    const zones = await prisma.zone.findMany({
+    await assertWarehouseAllowed(scope, Number(warehouseId));
+const zones = await prisma.zone.findMany({
       where: { warehouseId: BigInt(warehouseId) },
       include: {
         locations: {
@@ -52,6 +56,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(serializeBigInt({ success: true, data: result }));
   } catch (error: any) {
     console.error('[Warehouse Structure API] Error:', error);
-    return NextResponse.json({ success: false, error: '服务器内部错误' }, { status: 500 });
+    return handleApiError(error);
   }
 }

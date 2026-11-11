@@ -1,47 +1,104 @@
 "use client";
 
 import { Typography } from "antd";
-import { ArrowLeftOutlined } from "@ant-design/icons";
-import Link from "next/link";
+import LegalLayout from "@/components/legal/LegalLayout";
 
-const { Title, Paragraph, Text } = Typography;
+const { Paragraph } = Typography;
+
+const META = {
+  title: "服务协议",
+  version: "2.0",
+  updatedAt: "2026-11-11",
+  effectiveAt: "2026-11-11",
+};
+
+function H({ children }: { children: React.ReactNode }) {
+  return <h4 style={{ margin: "24px 0 8px", fontSize: 15.5, color: "#0B1220" }}>{children}</h4>;
+}
 
 export default function TermsPage() {
   return (
-    <div style={{ minHeight: "100dvh", background: "#F8FAFC", padding: "40px 20px" }}>
-      <div style={{ maxWidth: 720, margin: "0 auto", background: "#fff", borderRadius: 12, padding: "40px 36px", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
-        <Link href="/login" style={{ fontSize: 14, color: "#64748B", display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 24 }}>
-          <ArrowLeftOutlined /> 返回登录
-        </Link>
-        <h2 style={{ marginBottom: 8 }}>服务协议</h2>
-        <Text type="secondary">最后更新：2026年8月15日</Text>
+    <LegalLayout meta={META}>
+      <Paragraph style={{ color: "#475569" }}>
+        本协议是你（以下简称「用户」）与系统提供方之间，关于使用云仓智能仓储管理平台（以下简称「本系统」）的约定。
+        本系统为<strong>私有部署</strong>的企业内部管理系统，<strong>不开放自助注册</strong>，账号由所在单位的系统管理员创建与分配。
+        登录或使用本系统，即表示你已阅读并同意本协议。
+      </Paragraph>
 
-        <div style={{ marginTop: 32, lineHeight: 2, color: "#334155", fontSize: 14 }}>
-          <h4>1. 服务内容</h4>
-          <Paragraph>云仓智能仓储管理平台（以下简称"本系统"）为用户提供仓储管理、库存管理、商品管理、出入库管理等信息化管理服务。系统管理员负责分配用户账号和权限。</Paragraph>
+      <H>1. 服务内容</H>
+      <Paragraph>
+        本系统提供以下能力，实际开放范围以你所在单位配置的角色权限为准：
+        <br />• 主数据：商品/SKU、条码、单位、分类、供应商、客户、BOM
+        <br />• 仓储作业：入库、出库、调拨、盘点、货位与货架管理、扫码作业
+        <br />• 库存管理：实时结存、批次与效期、FEFO 先到期先出、库存冻结、成本核算
+        <br />• 分析与报表：库存报表、成本快照、报表导出、报表邮件订阅
+        <br />• 管理与审计：用户/角色/组织管理、数据权限、操作日志、登录日志
+        <br />• 运维能力：数据备份与恢复、回收站、初始化向导
+      </Paragraph>
 
-          <h4>2. 用户责任</h4>
-          <Paragraph>
-            用户应妥善保管账号密码，不得将账号借给他人使用。用户对使用其账号进行的所有操作承担法律责任。如发现账号被盗用，应立即通知管理员。<br/>
-            用户不得利用本系统从事违法违规活动，不得尝试攻击、破解或破坏系统。
-          </Paragraph>
+      <H>2. 账号与权限</H>
+      <Paragraph>
+        • 账号由管理员创建，采用「账号 + 密码 + 图形验证码」登录，可另行开启两步验证（TOTP）。
+        <br />• 权限分为「功能权限」（能否操作某一模块）与「数据权限」（能看到哪些仓库/组织的数据），由管理员按岗位授予。
+        <br />• 你应使用本人账号操作，<strong>不得转借、共用或代他人登录</strong>。账号下的一切操作视为你本人所为。
+        <br />• 人员离职或岗位调整时，管理员应及时停用账号或调整权限；账号停用后，其已登录会话会立即失效。
+      </Paragraph>
 
-          <h4>3. 数据安全</h4>
-          <Paragraph>系统运营方将采取合理措施保护用户数据安全，包括但不限于数据加密、访问控制、定期备份等。但由于不可抗力或用户自身原因导致的数据丢失，系统运营方不承担责任。</Paragraph>
+      <H>3. 用户义务</H>
+      <Paragraph>
+        • 保证录入数据真实、准确，特别是数量、单价、批次与效期信息，错误数据会直接影响库存与成本核算。
+        <br />• 不得利用本系统从事违法违规活动，不得尝试绕过权限、攻击接口、批量抓取数据或干扰系统运行。
+        <br />• 不得在系统中上传含有恶意代码的文件，或上传法律法规禁止的内容。
+        <br />• 发现账号异常（异地登录、权限异常、数据异常）应立即修改密码并通知管理员。
+      </Paragraph>
 
-          <h4>4. 知识产权</h4>
-          <Paragraph>本系统的软件、界面设计、文档等知识产权归系统运营方所有。未经授权，用户不得复制、修改、传播或逆向工程。</Paragraph>
+      <H>4. 数据归属</H>
+      <Paragraph>
+        你在本系统中录入的业务数据（商品、库存、单据、附件等）归<strong>你所在单位</strong>所有。
+        系统提供方仅作为技术服务方，按单位要求在部署环境中存储与处理这些数据，不将其用于服务以外的目的。
+        系统软件、界面、文档的知识产权归系统提供方所有；系统使用的开源组件遵循各自许可（如 Ant Design 为 MIT、脚手架参考实现为 MIT）。
+      </Paragraph>
 
-          <h4>5. 服务变更与终止</h4>
-          <Paragraph>系统运营方有权根据业务需要对系统功能进行更新、调整或停止。如涉及重大变更，将提前通知用户。</Paragraph>
+      <H>5. 备份与数据安全</H>
+      <Paragraph>
+        • 系统提供<strong>数据备份与恢复</strong>功能：可手动或按计划（每小时/每天/每周/自定义 Cron）自动备份数据库、上传文件与关键配置。
+        <br />• 备份默认保留 <strong>30 天</strong>，管理员可在「数据备份」页调整保留天数；超期备份会自动清理，并始终保留最近一次成功备份。
+        <br />• 执行恢复会以备份内容覆盖当前数据库与上传文件，恢复前系统会自动创建一次安全备份，但<strong>恢复操作不可撤销</strong>，请谨慎执行。
+        <br />• 备份文件保存在服务器本地目录（权限 600），未做额外加密；请由运维妥善控制服务器访问权限。
+        <br />• 备份是运维手段，<strong>不能替代你单位在财务、税务、行业监管方面要求的归档义务</strong>。
+      </Paragraph>
 
-          <h4>6. 免责声明</h4>
-          <Paragraph>本系统按"现状"提供服务，不作任何明示或暗示的保证。系统运营方不对因使用本系统而产生的任何间接损失承担责任。</Paragraph>
+      <H>6. 服务可用性与维护</H>
+      <Paragraph>
+        • 系统按「现状」提供，可用性取决于所在单位的服务器、网络与运维条件。
+        <br />• 升级、迁移、恢复等操作可能造成短时不可用，管理员应安排在业务低峰并提前通知使用者。
+        <br />• 因不可抗力（断电、断网、硬件故障、云服务中断等）导致的中断或数据损失，系统提供方在已完成合理备份义务的前提下不承担赔偿责任。
+      </Paragraph>
 
-          <h4>7. 争议解决</h4>
-          <Paragraph>因本协议引起的争议，双方应友好协商解决。协商不成的，提交系统运营方所在地人民法院管辖。</Paragraph>
-        </div>
-      </div>
-    </div>
+      <H>7. 服务变更与终止</H>
+      <Paragraph>
+        • 系统会持续迭代版本，功能可能新增、调整或下线；涉及影响业务的重大变更，将在系统内公告或由管理员通知。
+        <br />• 单位停止使用本系统时，应自行导出或备份所需数据；账号停用与数据删除由管理员执行。
+      </Paragraph>
+
+      <H>8. 责任限制</H>
+      <Paragraph>
+        • 因用户误操作（如错误过账、误删数据、错误配置权限）造成的损失，由操作方与其所在单位承担。
+        <br />• 在法律允许的范围内，系统提供方不对间接损失、利润损失或数据贬值承担责任。
+        <br />• 系统提供方对因其故意或重大过失造成的直接损失依法承担责任。
+      </Paragraph>
+
+      <H>9. 协议更新</H>
+      <Paragraph>
+        本协议可能随功能与合规要求更新，更新后会在本页公示版本号与生效日期。更新后继续使用本系统，视为接受更新内容；
+        如不接受，请停止使用并联系管理员。
+      </Paragraph>
+
+      <H>10. 争议解决</H>
+      <Paragraph>
+        因本协议产生的争议，双方应先友好协商；协商不成的，提交系统提供方所在地有管辖权的人民法院处理。
+        本协议的订立、效力与解释适用中华人民共和国法律。
+      </Paragraph>
+    </LegalLayout>
   );
 }

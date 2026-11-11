@@ -8,10 +8,7 @@ import { MailOutlined, SendOutlined } from '@ant-design/icons';
 
 const { Text } = Typography;
 
-async function readJson(res: Response) {
-  const raw = await res.text();
-  try { return raw ? JSON.parse(raw) : null; } catch { return null; }
-}
+import { settingsRequest } from './request';
 
 /** 系统设置 → 邮件与订阅（v1.2.0） */
 export default function MailSettings() {
@@ -24,13 +21,15 @@ export default function MailSettings() {
   const [effective, setEffective] = useState<string>('');
 
   const [subs, setSubs] = useState<any[]>([]);
+  // v1.2.4：订阅必须绑定邮件模板，模板列表由后端下发
+  const [templates, setTemplates] = useState<any[]>([]);
   const [subOpen, setSubOpen] = useState(false);
   const [subForm] = Form.useForm();
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const json = await readJson(await fetch('/api/settings/smtp', { cache: 'no-store' }));
+      const json = await settingsRequest('/api/settings/smtp', { cache: 'no-store' });
       if (json?.success && json.data?.configured) {
         setConfigured(true);
         setEffective(json.data.effectiveFrom || '');
@@ -47,14 +46,18 @@ export default function MailSettings() {
         setConfigured(false);
         form.setFieldsValue({ port: 465, secure: true, enabled: true });
       }
-    } finally {
+    } catch (e: any) { if (!e.errorFields) message.error(e.message || '请求失败，请重试'); } finally {
       setLoading(false);
     }
   }, [form]);
 
   const loadSubs = useCallback(async () => {
-    const json = await readJson(await fetch('/api/reports/subscriptions', { cache: 'no-store' }));
-    if (json?.success) setSubs(json.data || []);
+    try {
+      const json = await settingsRequest('/api/reports/subscriptions', { cache: 'no-store' });
+      const payload = json?.data || {};
+      setSubs(Array.isArray(payload.items) ? payload.items : []);
+      setTemplates(Array.isArray(payload.templates) ? payload.templates : []);
+    } catch (e: any) { message.error(e.message || '订阅加载失败'); }
   }, []);
 
   useEffect(() => { load(); loadSubs(); }, [load, loadSubs]);
@@ -63,14 +66,14 @@ export default function MailSettings() {
     const values = await form.validateFields();
     setSaving(true);
     try {
-      const json = await readJson(await fetch('/api/settings/smtp', {
+      const json = await settingsRequest('/api/settings/smtp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(values),
-      }));
+      });
       if (json?.success) { message.success('已保存'); load(); }
       else message.error(json?.error || '保存失败');
-    } finally {
+    } catch (e: any) { if (!e.errorFields) message.error(e.message || '请求失败，请重试'); } finally {
       setSaving(false);
     }
   };
@@ -80,29 +83,31 @@ export default function MailSettings() {
     try {
       const values = await form.validateFields();
       const to = mode === 'send' ? String(values.testTo || '').trim() : undefined;
-      const json = await readJson(await fetch('/api/settings/smtp', {
+      const json = await settingsRequest('/api/settings/smtp', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode, to }),
-      }));
+      });
       if (json?.success) message.success(json.message || '测试通过');
       else message.error(json?.error || '测试失败', 6);
-    } finally {
+    } catch (e: any) { if (!e.errorFields) message.error(e.message || '请求失败，请重试'); } finally {
       setTesting(false);
     }
   };
 
   const createSub = async () => {
+    try {
     const values = await subForm.validateFields();
-    const json = await readJson(await fetch('/api/reports/subscriptions', {
+    const json = await settingsRequest('/api/reports/subscriptions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(values),
-    }));
+    });
     if (json?.success) {
       message.success('订阅已创建');
       setSubOpen(false); subForm.resetFields(); loadSubs();
-    } else message.error(json?.error || '创建失败');
+    } else message.error('创建失败');
+    } catch (e: any) { if (!e.errorFields) message.error(e.message || '创建失败'); }
   };
 
   return (
@@ -212,6 +217,7 @@ export default function MailSettings() {
                 ? <Tag color="blue">每周{['一', '二', '三', '四', '五', '六', '日'][(r.weekday || 1) - 1]} {r.sendHour}:00</Tag>
                 : <Tag color="cyan">每天 {r.sendHour}:00</Tag>),
             },
+            { title: '模板', dataIndex: 'templateName', width: 150, render: (v: string) => <Tag color="purple">{v || '未绑定'}</Tag> },
             { title: '收件人', dataIndex: 'recipients', ellipsis: true },
             {
               title: '状态', dataIndex: 'enabled', width: 90,
@@ -220,12 +226,13 @@ export default function MailSettings() {
                   size="small"
                   checked={v === 1}
                   onChange={async (checked) => {
-                    await fetch('/api/reports/subscriptions', {
+                    try { await settingsRequest('/api/reports/subscriptions', {
                       method: 'PUT',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ id: r.id, enabled: checked }),
                     });
-                    loadSubs();
+                    await loadSubs();
+                    } catch (e: any) { message.error(e.message || "更新失败"); }
                   }}
                 />
               ),
@@ -238,8 +245,9 @@ export default function MailSettings() {
               title: '', key: 'act', width: 90, align: 'right' as const,
               render: (_: any, r: any) => (
                 <Button type="link" size="small" danger onClick={async () => {
-                  await fetch(`/api/reports/subscriptions?id=${r.id}`, { method: 'DELETE' });
-                  message.success('已删除'); loadSubs();
+                  try { await settingsRequest(`/api/reports/subscriptions?id=${r.id}`, { method: 'DELETE' });
+                  message.success('已删除'); await loadSubs();
+                  } catch (e: any) { message.error(e.message || '删除失败'); }
                 }}>删除</Button>
               ),
             },
@@ -251,6 +259,18 @@ export default function MailSettings() {
         <Form form={subForm} layout="vertical" initialValues={{ type: 'daily', sendHour: 8, weekday: 1 }}>
           <Form.Item name="name" label="名称" rules={[{ required: true }]}>
             <Input placeholder="库存日报" />
+          </Form.Item>
+          <Form.Item
+            name="templateCode"
+            label="邮件模板"
+            rules={[{ required: true, message: '请选择邮件模板' }]}
+            extra="邮件主题与正文由模板决定；模板里的 {{变量}} 会在发送时自动填充"
+          >
+            <Select
+              placeholder="选择一个模板"
+              options={templates.map((t) => ({ value: t.code, label: t.name + '（' + t.code + '）' }))}
+              notFoundContent="没有可用模板，请先在「邮件模板」里创建"
+            />
           </Form.Item>
           <Form.Item name="type" label="频率">
             <Select options={[{ value: 'daily', label: '每天' }, { value: 'weekly', label: '每周' }]} />

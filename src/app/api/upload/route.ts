@@ -3,6 +3,8 @@ import { requireAuth } from "@/lib/auth-guard";
 import { writeFile, mkdir } from "fs/promises";
 import crypto from "crypto";
 import path from "path";
+// M4/F2：目录与文件名校验统一收口到 lib，读写两侧必须用同一套规则
+import { uploadDir, isSafeUploadName } from "@/lib/upload-storage";
 
 /**
  * 图片上传（FIX-2026-1012）
@@ -71,12 +73,16 @@ export async function POST(req: NextRequest) {
 
     // 文件名：crypto 随机 + 服务端推导的扩展名，不采用任何用户输入
     const name = `${Date.now()}-${crypto.randomBytes(8).toString("hex")}.${sniffed.ext}`;
-    const uploadDir = path.join(process.cwd(), "public", "uploads");
-    await mkdir(uploadDir, { recursive: true });
+    if (!isSafeUploadName(name)) {
+      return NextResponse.json({ success: false, error: "非法文件名" }, { status: 400 });
+    }
 
-    const target = path.join(uploadDir, name);
+    const dir = uploadDir();
+    await mkdir(dir, { recursive: true });
+
+    const target = path.join(dir, name);
     // 兜底：确保解析结果仍在上传目录内（防符号链接/异常名跳出）
-    if (!path.resolve(target).startsWith(path.resolve(uploadDir) + path.sep)) {
+    if (!path.resolve(target).startsWith(path.resolve(dir) + path.sep)) {
       return NextResponse.json({ success: false, error: "非法文件名" }, { status: 400 });
     }
 

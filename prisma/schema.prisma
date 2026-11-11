@@ -28,9 +28,14 @@ model Organization {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  parent   Organization?  @relation("OrgTree", fields: [parentId], references: [id])
-  children Organization[] @relation("OrgTree")
-  users    User[]
+  // v1.2.3 数据权限：祖先链（逗号分隔的上级 id，不含自身），支持「本部门及以下」
+  ancestors String? @db.VarChar(1000) @map("ancestors")
+  level     Int     @default(1)
+
+  parent     Organization?  @relation("OrgTree", fields: [parentId], references: [id])
+  children   Organization[] @relation("OrgTree")
+  users      User[]
+  warehouses Warehouse[]
 
   @@map("organizations")
 }
@@ -48,6 +53,7 @@ model User {
   email          String?      @db.VarChar(100)
   orgId          BigInt?      @map("org_id") @db.UnsignedBigInt
   status         Int          @default(1) // 1-启用 0-禁用
+  sessionVersion Int          @default(0) @map("session_version")
   lastLoginAt    DateTime?    @map("last_login_at")
   createdAt      DateTime     @default(now()) @map("created_at")
   updatedAt      DateTime     @updatedAt @map("updated_at")
@@ -55,6 +61,7 @@ model User {
   organization   Organization? @relation(fields: [orgId], references: [id])
   userRoles      UserRole[]
   operationLogs  OperationLog[]
+  loginLogs      LoginLog[]
   exportTasks    ExportTask[]
   mpSessions     MpSession[]
   emailVerified      Boolean     @default(false) @map("email_verified")
@@ -72,9 +79,13 @@ model Role {
   code        String   @unique @db.VarChar(50)
   remark      String?  @db.VarChar(500)
   status      Int      @default(1)
+  // v1.2.3 数据权限：ALL 全部 / DEPT 本部门 / DEPT_AND_CHILD 本部门及下级 / SELF 仅本人经手 / CUSTOM 指定组织
+  dataScope       String  @default("ALL") @map("data_scope") @db.VarChar(20)
+  dataScopeOrgIds String? @map("data_scope_org_ids") @db.VarChar(1000)
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
+  permissionsConfigured Boolean @default(false) @map("permissions_configured")
   rolePermissions RolePermission[]
   userRoles       UserRole[]
   }
@@ -371,6 +382,10 @@ model Warehouse {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  // v1.2.3 数据权限：仓库归属组织，作用域按此收敛
+  orgId BigInt? @map("org_id") @db.UnsignedBigInt
+  organization Organization? @relation(fields: [orgId], references: [id])
+
   zones         Zone[]
   inventories   Inventory[]
   inventoryLots InventoryLot[]
@@ -382,6 +397,7 @@ model Warehouse {
 
   deletedAt DateTime? @map("deleted_at") // 软删除（回收站）
 
+  @@index([orgId])
   @@map("warehouses")
 }
 
@@ -518,6 +534,7 @@ model ReportSubscription {
   sendHour   Int       @default(8) @map("send_hour")
   weekday    Int?      // 1-7，周报用
   enabled    Int       @default(1)
+  templateCode String? @map("template_code") @db.VarChar(50)
   lastSentAt DateTime? @map("last_sent_at")
   createdAt  DateTime  @default(now()) @map("created_at")
   updatedAt  DateTime  @updatedAt @map("updated_at")
@@ -1335,4 +1352,125 @@ model MpSession {
 
   @@index([userId])
   @@map("mp_sessions")
+}
+
+/// 开放 API Token（v1.2.1 补齐）
+///
+/// 背景：代码里 /api/tokens 与 src/lib/token-auth.ts 一直用原生 SQL 读写 api_tokens 表，
+/// 但 schema.prisma 里从来没有对应模型，prisma db push / migrate 也就永远不会建表，
+/// 结果开放 API 与 Token 管理全部 500「Table warehouse.api_tokens doesn't exist」。
+/// 这里按现有原生 SQL 的列名（snake_case）补上模型，db push 后即可建表。
+model ApiToken {
+  id         BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  name       String    @db.VarChar(100)
+  token      String    @unique @db.VarChar(128)
+  userId     BigInt?   @map("user_id") @db.UnsignedBigInt
+  // MySQL 8.4 不允许 TEXT 列带默认值（Error 1101），改用 VarChar 存 JSON 串
+  permissions String   @default("[\"read\"]") @db.VarChar(1000)
+  lastUsedAt DateTime? @map("last_used_at")
+  expiresAt  DateTime? @map("expires_at")
+  status     Int       @default(1)
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("api_tokens")
+}
+
+// ==================== v1.2.3 字典中心 ====================
+// 把散落在代码里的枚举（单据状态、类型、岗位等）收进数据库，改值不用发版
+
+model DictType {
+  id        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  code      String   @unique @db.VarChar(64)   // 字典编码，如 stock_in_type
+  name      String   @db.VarChar(100)          // 中文名，如 入库类型
+  status    Int      @default(1)               // 1-启用 0-停用
+  remark    String?  @db.VarChar(500)
+  isSystem  Boolean  @default(false) @map("is_system") // 系统内置，不允许删除
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  items DictData[]
+
+  @@map("dict_types")
+}
+
+model DictData {
+  id        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  typeCode  String   @map("type_code") @db.VarChar(64)
+  label     String   @db.VarChar(100)          // 显示文本
+  value     String   @db.VarChar(100)          // 存储值
+  sort      Int      @default(0)               // 排序，越小越前
+  status    Int      @default(1)
+  isDefault Boolean  @default(false) @map("is_default")
+  remark    String?  @db.VarChar(500)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  type DictType @relation(fields: [typeCode], references: [code], onDelete: Cascade)
+
+  @@unique([typeCode, value])
+  @@index([typeCode, sort])
+  @@map("dict_data")
+}
+
+// ==================== v1.2.3 登录日志 ====================
+// 与操作日志分表：登录/登出/失败/锁定单独成线，便于审计与异常告警
+
+model LoginLog {
+  id        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  userId    BigInt?  @map("user_id") @db.UnsignedBigInt
+  username  String   @db.VarChar(50)
+  action    String   @db.VarChar(20)            // login / logout / failed / locked / 2fa_failed
+  success   Boolean  @default(true)
+  reason    String?  @db.VarChar(200)           // 失败原因（脱敏，不记密码）
+  ip        String?  @db.VarChar(64)
+  userAgent String?  @map("user_agent") @db.VarChar(500)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([username, createdAt])
+  @@map("login_logs")
+}
+
+
+// ==================== 备份与恢复 ====================
+// 每次备份一条记录：谁触发、什么类型、多大、耗时、校验和、成功与否
+
+model BackupRecord {
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  fileName    String   @unique @map("file_name") @db.VarChar(200)
+  kind        String   @db.VarChar(20)             // full | database | files
+  status      String   @db.VarChar(20)             // running | success | failed
+  sizeBytes   BigInt   @default(0) @map("size_bytes") @db.UnsignedBigInt
+  durationMs  Int      @default(0) @map("duration_ms")
+  checksum    String?  @db.VarChar(64)             // sha256
+  note        String?  @db.VarChar(200)
+  error       String?  @db.VarChar(500)
+  createdBy   BigInt?  @map("created_by") @db.UnsignedBigInt
+  createdByName String? @map("created_by_name") @db.VarChar(50)
+  trigger     String   @default("manual") @db.VarChar(20) // manual | schedule
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@map("backup_records")
+}
+
+// ==================== 邮件模板（v1.2.4） ====================
+// 订阅只能选模板，不能自由填正文；模板里的 {{变量}} 由发信时按白名单渲染
+
+model MailTemplate {
+  id        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  code      String   @unique @db.VarChar(50)
+  name      String   @db.VarChar(100)
+  subject   String   @db.VarChar(200)
+  bodyHtml  String   @map("body_html") @db.Text
+  variables String?  @db.VarChar(1000)
+  isSystem  Boolean  @default(false) @map("is_system")
+  status    Int      @default(1)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("mail_templates")
 }

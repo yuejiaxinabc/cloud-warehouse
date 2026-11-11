@@ -1,19 +1,31 @@
+import { businessAccess, withWarehouseScope } from '@/app/api/warehouse/access';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth-guard';
 import { serializeBigInt } from '@/lib/serialize';
+import { handleApiError } from '@/lib/errors';
 
 export async function GET(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  await requireAuth(req);
   try {
+    const { scope } = await businessAccess('product:view');
     const productId = parseInt(params.id);
+
+    // P2-9：与同资源其它方法保持一致 —— 商品不存在就 404，
+    // 而不是回 200 + 空数组（前端会误以为"这个商品没有价格记录"）。
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return NextResponse.json({ success: false, error: '商品 ID 不合法' }, { status: 400 });
+    }
+    const exists = await prisma.product.findUnique({ where: { id: productId }, select: { id: true, deletedAt: true } });
+    if (!exists || exists.deletedAt) {
+      return NextResponse.json({ success: false, error: '商品不存在' }, { status: 404 });
+    }
 
     // 批次价格
     const lots = await prisma.inventoryLot.findMany({
-      where: { productId, status: 1 },
+      where: withWarehouseScope({ productId, status: 1 }, scope),
       select: {
         id: true, lotNumber: true, costPrice: true, quantity: true, createdAt: true,
         warehouse: { select: { name: true } },
@@ -23,7 +35,7 @@ export async function GET(
 
     // 入库明细价格
     const inboundItems = await prisma.inboundItem.findMany({
-      where: { productId, costPrice: { not: null } },
+      where: { productId, costPrice: { not: null }, order: withWarehouseScope({}, scope) },
       select: {
         id: true, costPrice: true, quantity: true, lotNumber: true, createdAt: true,
         order: { select: { orderNo: true, postedAt: true } },
@@ -59,7 +71,7 @@ export async function GET(
 
     // 当前成本价
     const inventory = await prisma.inventory.findFirst({
-      where: { productId },
+      where: withWarehouseScope({ productId }, scope),
       select: { avgCost: true },
     });
 
@@ -75,6 +87,6 @@ export async function GET(
       }),
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }

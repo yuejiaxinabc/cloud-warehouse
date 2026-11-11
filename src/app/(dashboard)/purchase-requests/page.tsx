@@ -108,7 +108,9 @@ export default function PurchaseRequestsPage() {
     setLocations([]);
     setBoxes([]);
     try {
-      const res = await fetch(`/api/warehouse/locations?warehouseId=${warehouseId}`);
+      // v1.2.1：必须带 limit（后端默认分页只回 200 条，仓库货位 2600+ 会漏）；
+      // limit=2000 是当前折中，后续应改成按编码服务端搜索
+      const res = await fetch(`/api/warehouse/locations?warehouseId=${warehouseId}&limit=2000`);
       const json = await res.json();
       if (json.success) setLocations(json.data || []);
     } catch {}

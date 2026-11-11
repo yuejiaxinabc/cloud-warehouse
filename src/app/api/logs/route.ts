@@ -1,12 +1,14 @@
-import { getServerSession } from 'next-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
+import { requireLogin, requirePermission } from '@/lib/auth-guard';
+import { handleApiError } from '@/lib/errors';
 
 // GET /api/logs?type=system|operation|inventory&page=1&pageSize=20&keyword=xxx
 export async function GET(req: NextRequest) {
   try {
+    // P0-1/P1-8：操作日志含他人 IP 与账号，只读角色（auditor）与管理面才可读
+    await requirePermission('audit:view');
     const sp = req.nextUrl.searchParams;
     const type = sp.get('type') || '';        // system / operation / inventory
     const page = parseInt(sp.get('page') || '1');
@@ -57,13 +59,15 @@ export async function GET(req: NextRequest) {
       data: serializeBigInt({ items, total, page, pageSize }),
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }
 
 // POST /api/logs — 写入日志（内部调用）
 export async function POST(req: NextRequest) {
   try {
+    // 内部写入接口：至少要求登录，避免匿名伪造日志（userId/ip 由 body 指定）
+    await requireLogin();
     const body = await req.json();
     const { userId, module, action, refType, refId, content, ip } = body;
 
@@ -81,6 +85,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, data: serializeBigInt(log) });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }

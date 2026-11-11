@@ -2,8 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import ExcelJS from 'exceljs';
 import { requireAuth, authErrorResponse } from '@/lib/auth-guard';
 import { prisma } from '@/lib/prisma';
+import { businessAccess, warehouseWhere } from '@/app/api/warehouse/access';
 import { buildColumns, headerMap, toBool, toNum } from '@/lib/product-excel';
 import { normalizeLocationCode } from '@/lib/location-binding';
+import { recalcAvailable } from '@/lib/inventory-sync';
+import { AppError } from '@/lib/errors';
+import {
+  requireProductName, requireProductCode, optionalMoney, optionalQty, optionalText,
+  PRODUCT_LIMITS,
+} from '@/lib/product-guard';
+import { sanitizeText } from '@/lib/sanitize';
 
 /**
  * POST /api/products/import
@@ -17,7 +25,7 @@ import { normalizeLocationCode } from '@/lib/location-binding';
  */
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth(req);
+    const { scope } = await businessAccess('product:create');
 
     const form = await req.formData();
     const file = form.get('file') as File | null;
@@ -29,6 +37,7 @@ export async function POST(req: NextRequest) {
     }
 
     const warehouses = await prisma.warehouse.findMany({
+      where: warehouseWhere(scope),
       select: { id: true, name: true, code: true },
       orderBy: { id: 'asc' },
     });
@@ -92,8 +101,32 @@ export async function POST(req: NextRequest) {
       if (!code) { push('error', '商品编码为空'); continue; }
       if (!name) { push('error', '商品名称为空'); continue; }
 
+      // 严格数字：单元格非空但不是数字（如 ¥100、abc）时报错，不静默当空。
+      // 注意 toNum 会去千分位逗号，"2,250,000" 会被解析成 2250000，
+      // 再由 optionalMoney 的 1,000,000 上限挡掉，不会悄悄入库。
+      const strictNum = (v: unknown, label: string): number | null => {
+        if (v === null || v === undefined || v === '') return null;
+        const n = toNum(v);
+        if (n === null) throw new AppError(`${label}格式不正确`, 400);
+        return n;
+      };
+
       try {
-        const exists = await prisma.product.findUnique({ where: { code } });
+        // v1.2.4 B：导入与新建商品走同一套校验（长度、去标签、金额数量
+        // >=0 且 <=1,000,000），不合格的行只记 error，不中断整批导入。
+        const finalCode = requireProductCode(code);
+        const finalName = requireProductName(name);
+        const finalDefaultCost = optionalMoney(strictNum(rec.defaultCost, '默认成本'), '默认成本');
+        const finalSalePrice = optionalMoney(strictNum(rec.salePrice, '售价'), '售价');
+        const finalSafetyStock = optionalQty(strictNum(rec.safetyStock, '安全库存'), '安全库存');
+        const finalBarcode = optionalText(rec.barcode, '条码', PRODUCT_LIMITS.barcode);
+        const finalSpec = optionalText(rec.spec, '规格说明', PRODUCT_LIMITS.spec);
+        const finalBrand = optionalText(rec.brand, '品牌', PRODUCT_LIMITS.brand);
+        const finalModel = optionalText(rec.model, '型号', PRODUCT_LIMITS.model);
+        const finalRemark = optionalText(rec.remark, '备注', PRODUCT_LIMITS.remark);
+        const finalQty = optionalQty(strictNum(rec.initialQty, '初始数量'), '初始数量') ?? 0;
+
+        const exists = await prisma.product.findUnique({ where: { code: finalCode } });
         if (exists) { push('skip', '编码已存在，未覆盖'); continue; }
 
         // 仓库 + 货位（有仓库时必填）
@@ -127,7 +160,7 @@ export async function POST(req: NextRequest) {
 
         // 分类 / 单位：按名称找，没有就建
         let categoryId: bigint | null = null;
-        const catName = String(rec.category ?? '').trim();
+        const catName = sanitizeText(rec.category, 100);
         if (catName) {
           const c = await prisma.category.findFirst({ where: { name: catName }, select: { id: true } });
           if (c) categoryId = c.id;
@@ -141,7 +174,7 @@ export async function POST(req: NextRequest) {
         }
 
         let unitId: bigint | null = null;
-        const unitName = String(rec.unit ?? '').trim();
+        const unitName = sanitizeText(rec.unit, 20);
         if (unitName) {
           const u = await prisma.unit.findFirst({ where: { name: unitName }, select: { id: true } });
           if (u) unitId = u.id;
@@ -157,28 +190,28 @@ export async function POST(req: NextRequest) {
         const costMethod = String(rec.costMethod ?? '').trim().toUpperCase() || 'WEIGHTED';
         const product = await prisma.product.create({
           data: {
-            code,
-            name,
-            barcode: String(rec.barcode ?? '').trim() || null,
+            code: finalCode,
+            name: finalName,
+            barcode: finalBarcode ?? null,
             categoryId,
             unitId,
-            spec: String(rec.spec ?? '').trim() || null,
-            brand: String(rec.brand ?? '').trim() || null,
-            model: String(rec.model ?? '').trim() || null,
+            spec: finalSpec ?? null,
+            brand: finalBrand ?? null,
+            model: finalModel ?? null,
             costMethod: ['WEIGHTED', 'FIFO', 'MONTHLY'].includes(costMethod) ? costMethod : 'WEIGHTED',
-            defaultCost: toNum(rec.defaultCost) ?? null,
-            salePrice: toNum(rec.salePrice) ?? null,
-            safetyStock: toNum(rec.safetyStock) ?? null,
+            defaultCost: finalDefaultCost ?? null,
+            salePrice: finalSalePrice ?? null,
+            safetyStock: finalSafetyStock ?? null,
             enableSerial: toBool(rec.enableSerial),
             enableBatch: toBool(rec.enableBatch),
-            remark: String(rec.remark ?? '').trim() || null,
+            remark: finalRemark ?? null,
             status: 1,
           },
           select: { id: true },
         });
 
         // 初始库存 + 货位明细
-        const qty = toNum(rec.initialQty) ?? 0;
+        const qty = finalQty;
         if (warehouseId && locationId && qty > 0) {
           await prisma.$transaction(async (tx) => {
             const inv = await tx.inventory.create({
@@ -189,7 +222,7 @@ export async function POST(req: NextRequest) {
                 locationId,
                 onHand: qty,
                 locked: 0,
-                avgCost: toNum(rec.defaultCost) != null ? String(toNum(rec.defaultCost)) as any : null,
+                avgCost: finalDefaultCost != null ? String(finalDefaultCost) as any : null,
                 version: 0,
               },
             });
@@ -202,6 +235,8 @@ export async function POST(req: NextRequest) {
                 quantity: qty,
               },
             });
+            // P1-2：导入建库存也要同步 available（= onHand - locked），否则新导入商品可用量恒为 0
+            await recalcAvailable(tx, { id: inv.id });
           });
         }
 

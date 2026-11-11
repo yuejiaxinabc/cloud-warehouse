@@ -93,31 +93,49 @@ export class CostService {
       const beginQty = prevSnapshot ? Number(prevSnapshot.endQty || 0) : 0;
       const beginAmount = prevSnapshot ? Number(prevSnapshot.endAmount || 0) : 0;
 
-      // 本期入库
-      const inAgg = await prisma.inventoryTransaction.aggregate({
+      // 本期出/入库流水（带真实成本价；出库流水 quantity 记负数，取绝对值）
+      const txns = await prisma.inventoryTransaction.findMany({
         where: {
           productId: product.id,
-          txnType: 'INBOUND',
+          txnType: { in: ['INBOUND', 'OUTBOUND'] },
           txnTime: { gte: startDate, lte: endDate },
         },
-        _sum: { quantity: true },
+        select: { txnType: true, quantity: true, costPrice: true },
       });
 
-      // 本期出库
-      const outAgg = await prisma.inventoryTransaction.aggregate({
-        where: {
-          productId: product.id,
-          txnType: 'OUTBOUND',
-          txnTime: { gte: startDate, lte: endDate },
-        },
-        _sum: { quantity: true },
+      // 有效成本（v1.2.4 B）：在库加权平均成本优先，defaultCost 兜底。
+      // 此前只认 defaultCost，为 0 时 inAmount/outAmount 全是 0（有量无价）。
+      const invRows = await prisma.inventory.findMany({
+        where: { productId: product.id },
+        select: { onHand: true, avgCost: true },
       });
+      let invQtySum = 0;
+      let invValueSum = 0;
+      for (const inv of invRows) {
+        const q = Number(inv.onHand || 0);
+        const c = Number(inv.avgCost || 0);
+        invQtySum += q;
+        invValueSum += q * c;
+      }
+      const defaultCost = product.defaultCost ? Number(product.defaultCost) : 0;
+      const avgCost = invQtySum > 0 && invValueSum > 0 ? invValueSum / invQtySum : defaultCost;
 
-      const avgCost = product.defaultCost ? Number(product.defaultCost) : 0;
-      const inQty = Number(inAgg._sum.quantity || 0);
-      const outQty = Math.abs(Number(outAgg._sum.quantity || 0));
-      const inAmount = inQty * avgCost;
-      const outAmount = outQty * avgCost;
+      let inQty = 0;
+      let inAmount = 0;
+      let outQty = 0;
+      let outAmount = 0;
+      for (const txn of txns) {
+        const qty = Math.abs(Number(txn.quantity || 0));
+        if (qty <= 0) continue;
+        const unitCost = txn.costPrice != null ? Number(txn.costPrice) : avgCost;
+        if (txn.txnType === 'INBOUND') {
+          inQty += qty;
+          inAmount += qty * unitCost;
+        } else {
+          outQty += qty;
+          outAmount += qty * unitCost;
+        }
+      }
 
       const endQty = beginQty + inQty - outQty;
       const endAmount = beginAmount + inAmount - outAmount;

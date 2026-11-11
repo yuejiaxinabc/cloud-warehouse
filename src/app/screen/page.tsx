@@ -12,7 +12,9 @@ import { LogoMark } from '@/components/brand/Logo';
 export default function ScreenPage() {
   const router = useRouter();
   const [data, setData] = useState<any>({ kpi: null, trend: [], alerts: [] });
-  const [now, setNow] = useState(new Date());
+  // v1.2.1（P2-1）：首帧不取当前时刻。SSR 用的是服务器时间和时区，
+  // 客户端 hydrate 必然不同 → React #425；交给 useEffect 后再渲染。
+  const [now, setNow] = useState<Date | null>(null);
   const [fail, setFail] = useState(false);
   // 柱子悬浮提示：{ x, y, date, inbound, outbound, transfer }
   const [tip, setTip] = useState<any>(null);
@@ -45,6 +47,7 @@ export default function ScreenPage() {
   }, []);
 
   useEffect(() => {
+    setNow(new Date()); // 挂载后才首次渲染时钟
     load();
     const t = setInterval(load, 30_000);
     const c = setInterval(() => setNow(new Date()), 1000);
@@ -74,8 +77,10 @@ export default function ScreenPage() {
         </div>
         <div className="yc-screen-head-right">
           <div className="yc-screen-clock">
-            <div className="yc-screen-time">{now.toLocaleTimeString('zh-CN', { hour12: false })}</div>
-            <div className="yc-screen-date">{now.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'long' })}</div>
+            <div className="yc-screen-time">{now ? now.toLocaleTimeString('zh-CN', { hour12: false }) : '--:--:--'}</div>
+            <div className="yc-screen-date">
+              {now ? now.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'long' }) : '----年--月--日'}
+            </div>
           </div>
           <button className="yc-screen-exit" onClick={() => router.push('/')} title="退出大屏（Esc）">
             <span aria-hidden>✕</span> 退出大屏

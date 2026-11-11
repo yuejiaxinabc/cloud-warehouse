@@ -41,3 +41,6 @@ export function ExportButton({ module, filters, fileName }: ExportButtonProps) {
     </Button>
   );
 }
+
+// src/components/ui/index.ts 以 default 方式再导出，这里补一个默认导出（与具名导出并存）
+export default ExportButton;

@@ -216,7 +216,8 @@ export class BomService {
       });
 
       const totalAvailable = inventories.reduce((sum, inv) => {
-        return sum + Number(inv.onHand) - Number(inv.locked);
+        // v1.2.4 B：单行可用量先夹到 0 再汇总，避免负库存抵消正常库存
+        return sum + Math.max(0, Number(inv.onHand) - Number(inv.locked));
       }, 0);
 
       const shortage = Math.max(0, required - totalAvailable);

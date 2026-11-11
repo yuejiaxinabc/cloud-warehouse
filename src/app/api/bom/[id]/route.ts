@@ -1,9 +1,9 @@
 import { NextRequest } from 'next/server';
-import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { BomService } from '@/services/bom.service';
 import { idSchema } from '@/lib/validators';
 import { successResponse, errorResponse, handleApiError } from '@/lib/errors';
+import { getSessionChecked } from '@/lib/auth-guard';
 
 /**
  * GET /api/bom/[id] - BOM 详情
@@ -13,7 +13,7 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await getSessionChecked();
     if (!session) return errorResponse('请先登录', 401);
 
     const { id } = idSchema.parse({ id: params.id });
@@ -33,7 +33,7 @@ export async function PUT(
   { params }: { params: { id: string } }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await getSessionChecked();
     if (!session) return errorResponse('请先登录', 401);
 
     const { id } = idSchema.parse({ id: params.id });
@@ -54,7 +54,7 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await getSessionChecked();
     if (!session) return errorResponse('请先登录', 401);
 
     const { id } = idSchema.parse({ id: params.id });

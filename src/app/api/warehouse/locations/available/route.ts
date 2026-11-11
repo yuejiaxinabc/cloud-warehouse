@@ -1,62 +1,74 @@
-import { getServerSession } from 'next-auth';
+import { businessAccess, assertWarehouseAllowed, withWarehouseScope, checkZone, checkLocation } from '@/app/api/warehouse/access';
 import { NextRequest, NextResponse } from 'next/server';
-import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
+// M3：错误统一走 handleApiError，不再回显 error.message
+import { handleApiError } from '@/lib/errors';
+import { requireAuth } from '@/lib/auth-guard';
 
-// GET /api/warehouse/locations/available?warehouseId=X
-// 返回可用货位列表：一个货位装一种货，不限数量
+// GET /api/warehouse/locations/available?warehouseId=X&limit=N
+// 返回可用（空闲）货位列表：一个货位装一种货，不限数量
+//
+// v1.2.1（P1-10）：判空改看 location_stocks。
+// 原来用已废弃的 boxes 表判空（loc.boxes.filter(b => !b.remark)），
+// 而货位与商品的绑定自 v1.1.1 起就迁到了 location_stocks，
+// boxes 只剩历史数据 → freeBoxes 恒为空 → 接口永远返回 data: []。
 export async function GET(req: NextRequest) {
   try {
+    const { scope } = await businessAccess();
+    await requireAuth(req);
     const warehouseId = req.nextUrl.searchParams.get('warehouseId');
     if (!warehouseId) {
       return NextResponse.json({ success: false, error: '缺少 warehouseId' }, { status: 400 });
     }
 
-    // 获取所有区域和货位（含货位）
+    await assertWarehouseAllowed(scope, Number(warehouseId));
+// 一次性取出「已被占用」的货位集合，循环内 O(1)，避免每个货位一次查询（N+1）
+    const occupied = await prisma.locationStock.findMany({
+      where: { warehouseId: BigInt(warehouseId), quantity: { gt: 0 } },
+      select: { locationId: true },
+      distinct: ['locationId'],
+    });
+    const occupiedIds = new Set(occupied.map((o) => o.locationId.toString()));
+
     const zones = await prisma.zone.findMany({
       where: { warehouseId: BigInt(warehouseId) },
       orderBy: { code: 'asc' },
-      include: {
+      select: {
+        id: true,
+        code: true,
+        name: true,
         locations: {
+          where: { status: 1 }, // 跳过停用货位
           orderBy: { code: 'asc' },
-          include: {
-            boxes: { orderBy: { code: 'asc' } },
-          },
+          select: { id: true, code: true },
         },
       },
     });
 
     const result: any[] = [];
-
     for (const zone of zones) {
       for (const loc of zone.locations) {
-        // 跳过停用货位
-        if (loc.status !== 1) continue;
-
-        const activeBoxes = loc.boxes.filter((b: any) => b.status === 1);
-        const sealedBoxes = loc.boxes.filter((b: any) => b.status !== 1);
-
-        // 空闲货位 = 启用且 remark 为空的货位（一个货位装一种货，不限数量）
-        const freeBoxes = activeBoxes.filter((b: any) => !b.remark || b.remark.trim() === '');
-
-        if (freeBoxes.length === 0) continue; // 没有空闲货位，跳过
-
+        if (occupiedIds.has(loc.id.toString())) continue; // 已被商品占用，跳过
         result.push({
           locationId: loc.id.toString(),
           locationCode: loc.code,
           zoneCode: zone.code,
           zoneName: zone.name,
-          activeBoxes: activeBoxes.length,
-          freeBoxes: freeBoxes.length,
-          sealedBoxes: sealedBoxes.length,
-          label: `${zone.name} ${loc.code} (${freeBoxes.length}空闲)`,
+          label: `${zone.name} ${loc.code}（空闲）`,
         });
       }
     }
 
-    return NextResponse.json({ success: true, data: serializeBigInt(result) });
+    // 附带 limit，避免大仓一次拉回 2600 条（默认不过滤，保持旧行为）
+    const limitRaw = Number.parseInt(req.nextUrl.searchParams.get('limit') || '0', 10);
+    const total = result.length;
+    const data = Number.isFinite(limitRaw) && limitRaw > 0
+      ? result.slice(0, Math.min(limitRaw, 2000))
+      : result;
+
+    return NextResponse.json({ success: true, data: serializeBigInt(data), total });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }

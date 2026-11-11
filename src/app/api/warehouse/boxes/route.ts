@@ -1,14 +1,18 @@
+import { handleApiError } from '@/lib/errors';
+import { businessAccess, assertWarehouseAllowed, withWarehouseScope, checkZone, checkLocation } from '@/app/api/warehouse/access';
 import { getServerSession } from 'next-auth';
 import { NextRequest, NextResponse } from "next/server";
 import { authOptions } from '@/lib/auth';
 import { prisma } from "@/lib/prisma";
 import { serializeBigInt } from "@/lib/serialize";
+import { safeErrorMessage } from '@/lib/errors';
 
 /**
  * GET /api/warehouse/boxes?locationId=X - 获取某货位下的所有货位（含停用状态）
  */
 export async function GET(req: NextRequest) {
   try {
+    const { scope } = await businessAccess();
     const { searchParams } = new URL(req.url);
     const locationId = searchParams.get("locationId");
 
@@ -19,6 +23,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    await checkLocation(scope, locationId);
     const boxes = await prisma.box.findMany({
       where: { locationId: BigInt(locationId) },
       orderBy: { id: "asc" },
@@ -37,9 +42,6 @@ export async function GET(req: NextRequest) {
     );
   } catch (error: any) {
     console.error("Box list API error:", error);
-    return NextResponse.json(
-      serializeBigInt({ success: false, error: error.message }),
-      { status: 500 }
-    );
+    return handleApiError(error);
   }
 }

@@ -4,7 +4,7 @@ export { default as SearchBar } from './SearchBar';
 export { default as ActionButtons } from './ActionButtons';
 export { default as ConfirmModal } from './ConfirmModal';
 export { default as EmptyState } from './EmptyState';
-export { default as LoadingSkeleton } from './LoadingSkeleton';
+export { default as LoadingSkeleton, TableSkeleton, CardSkeleton, PageSkeleton } from './LoadingSkeleton';
 export { default as ExportButton } from './ExportButton';
 export { default as PrintLabel } from './PrintLabel';
 export { default as ScanModal } from './ScanModal';

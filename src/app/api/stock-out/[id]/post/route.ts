@@ -1,9 +1,11 @@
+import { getDataScope, withWarehouseScope, withDocumentScope, assertWarehouseAllowed, assertDocumentAllowed, type DataScope } from '@/lib/data-scope';
+import { requireAuth, requirePermission } from '@/lib/auth-guard';
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { emitWebhook } from '@/lib/webhook';
 import { serializeBigInt } from '@/lib/serialize';
+import { safeErrorMessage, handleApiError, AppError } from '@/lib/errors';
+import { claimPosting, deductOnHand, deductLot, deductLocationStock } from '@/lib/stock-atomic';
 
 /**
  * 出库过账（v1.2.0 起按 FEFO 选批）
@@ -20,10 +22,12 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   try {
+    const auth = await requireAuth(request);
+    await requirePermission('stock_out:post', auth);
     const id = Number(params.id);
     const ip = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
-    const session = await getServerSession(authOptions);
-    const userId = session?.user ? Number((session.user as any).id) : null;
+    // v1.2.1：过账属于高权操作，auditor 等只读角色不得过账（P0-1）
+    const userId = Number(auth.user.id);
 
     const order = await prisma.outboundOrder.findUnique({
       where: { id },
@@ -31,13 +35,33 @@ export async function POST(
     });
 
     if (!order) return NextResponse.json({ success: false, error: '出库单不存在' }, { status: 404 });
-    if (order.status !== 'DRAFT') return NextResponse.json({ success: false, error: '只有草稿状态才能过账' }, { status: 400 });
+    await assertDocumentAllowed(await getDataScope(auth.user), auth.user, order);
+    // v1.2.1：submit 之后单据是 LOCKED、审批通过后是 APPROVED。原实现只放行 DRAFT，
+    // 导致「提交 → 审批 → 过账」这条正常链路永远走不通。现在 DRAFT/APPROVED 都放行，
+    // LOCKED 明确告诉用户先去审批（或取消），不再抛一句无出路的提示。
+    if (order.status === 'LOCKED') {
+      return NextResponse.json(
+        { success: false, error: '出库单已提交审批（库存已锁定），请先审批通过后再过账，或取消该单释放库存' },
+        { status: 400 }
+      );
+    }
+    if (order.status !== 'DRAFT' && order.status !== 'APPROVED') {
+      return NextResponse.json({ success: false, error: '当前状态不允许过账' }, { status: 400 });
+    }
 
     type PickSummary = { lotNumber: string | null; qty: number; expiredAt: Date | null };
 
     const picksByItem = new Map<string, PickSummary[]>();
 
     await prisma.$transaction(async (tx) => {
+      // P0-1：先把状态原子抢占成 POSTING，只有抢到的事务能继续。
+      // 并发过账同一张单时，其余事务这里就 affected=0，直接失败，不会重复扣减。
+      const claimed = await claimPosting(tx, 'outbound_orders', id, ['DRAFT', 'APPROVED']);
+      if (!claimed) {
+        // 业务失败用 AppError(400)：并发冲突不是服务端故障，前端要能看到可读提示
+        throw new AppError('该出库单正在被处理或已过账，请刷新后重试', 400);
+      }
+
       for (const item of order.outboundItems) {
         const productId = Number(item.productId);
         const quantity = Number(item.quantity);
@@ -85,10 +109,11 @@ export async function POST(
           const deduct = Math.min(remain, lotQty);
           if (deduct <= 0) continue;
 
-          await tx.inventoryLot.update({
-            where: { id: lot.id },
-            data: { quantity: lotQty - deduct },
-          });
+          // P0-1：条件更新，扣不动说明这批已被并发扣走，直接失败而不是扣成负数
+          const lotOk = await deductLot(tx, lot.id, deduct);
+          if (lotOk === 0) {
+            throw new AppError(`批次 ${lot.lotNumber || lot.id} 余量不足（可能被并发扣减），请刷新后重试`, 400);
+          }
 
           await tx.outboundLotPick.create({
             data: { outboundItemId: item.id, lotNumber: lot.lotNumber, quantity: deduct },
@@ -119,7 +144,9 @@ export async function POST(
             if (lotRemain <= 0) break;
             const rowQty = Number(row.quantity);
             const deduct = Math.min(lotRemain, rowQty);
-            await tx.locationStock.update({ where: { id: row.id }, data: { quantity: rowQty - deduct } });
+            // 并发下可能被别人先扣走，扣不动就跳到下一个货位
+            const locOk = await deductLocationStock(tx, row.id, deduct);
+            if (locOk === 0) continue;
             lotRemain -= deduct;
             remainLoc -= deduct;
           }
@@ -133,7 +160,8 @@ export async function POST(
             if (remainLoc <= 0) break;
             const rowQty = Number(row.quantity);
             const deduct = Math.min(remainLoc, rowQty);
-            await tx.locationStock.update({ where: { id: row.id }, data: { quantity: rowQty - deduct } });
+            const locOk = await deductLocationStock(tx, row.id, deduct);
+            if (locOk === 0) continue;
             remainLoc -= deduct;
           }
         }
@@ -142,11 +170,12 @@ export async function POST(
         // ---- 库存主记录 ----
         const beforeQty = Number(inventory.onHand);
         const afterQty = beforeQty - quantity;
-        const lockedQty = Number(inventory.locked || 0);
-        await tx.inventory.update({
-          where: { id: inventory.id },
-          data: { onHand: afterQty, available: Math.max(0, afterQty - lockedQty), version: { increment: 1 } },
-        });
+        // P0-1：原子扣减。条件不满足（库存不足或已被并发扣走）时 affected=0，
+        // 整个事务回滚，前面扣的批次/货位一并还原。
+        const stockOk = await deductOnHand(tx, inventory.id, quantity);
+        if (stockOk === 0) {
+          throw new AppError(`商品ID=${productId} 库存不足或已被其他单据占用，请刷新后重试`, 400);
+        }
 
         // ---- 流水（备注里写清 FEFO 选了哪些批次）----
         const pickText = picks
@@ -209,6 +238,6 @@ export async function POST(
       })
     );
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 });
+    return handleApiError(error);
   }
 }

@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
 import { requireAuth } from '@/lib/auth-guard';
 import { writeLog, getClientIp } from '@/lib/log';
+import { safeErrorMessage } from '@/lib/errors';
 
 /**
  * 单据附件（v1.3）
@@ -29,7 +30,7 @@ export async function GET(req: NextRequest) {
     });
     return NextResponse.json(serializeBigInt({ success: true, data: items }));
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message || '附件查询失败' }, { status: 500 });
+    return NextResponse.json({ success: false, error: safeErrorMessage(error) || '附件查询失败' }, { status: 500 });
   }
 }
 
@@ -79,7 +80,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(serializeBigInt({ success: true, data: row }));
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message || '附件保存失败' }, { status: 500 });
+    return NextResponse.json({ success: false, error: safeErrorMessage(error) || '附件保存失败' }, { status: 500 });
   }
 }
 
@@ -102,6 +103,6 @@ export async function DELETE(req: NextRequest) {
     });
     return NextResponse.json({ success: true });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message || '附件删除失败' }, { status: 500 });
+    return NextResponse.json({ success: false, error: safeErrorMessage(error) || '附件删除失败' }, { status: 500 });
   }
 }

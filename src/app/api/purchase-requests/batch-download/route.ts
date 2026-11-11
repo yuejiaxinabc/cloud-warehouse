@@ -1,3 +1,6 @@
+import { businessAccess, assertWarehouseAllowed } from '@/app/api/warehouse/access';
+import { withDocumentScope, assertDocumentAllowed } from '@/lib/data-scope';
+import { handleApiError } from '@/lib/errors';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireAuth, authErrorResponse } from '@/lib/auth-guard';
@@ -17,7 +20,7 @@ const STATUS_TEXT: Record<string, string> = {
  */
 export async function POST(req: NextRequest) {
   try {
-    await requireAuth();
+    const { scope, user } = await businessAccess(['purchase:view', 'stock_in:view']);
     const body = await req.json();
     const ids: number[] = (body.ids || []).map((n: any) => Number(n)).filter((n: number) => !isNaN(n));
 
@@ -26,7 +29,7 @@ export async function POST(req: NextRequest) {
     }
 
     const requests = await prisma.purchaseRequest.findMany({
-      where: { id: { in: ids.map((n) => BigInt(n)) } },
+      where: withDocumentScope({ id: { in: ids.map((n) => BigInt(n)) } }, scope, user, { field: 'applicantId' }),
       include: {
         warehouse: { select: { name: true, code: true } },
         location: { select: { name: true, code: true } },
@@ -82,6 +85,6 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (error: any) {
-    return authErrorResponse(error);
+    return handleApiError(error);
   }
 }

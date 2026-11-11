@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
 import { validateApiToken, hasPermission } from '@/lib/token-auth';
+import { handleApiError } from '@/lib/errors';
 
 // GET /api/v1/products - 获取商品列表（需要 Token）
 export async function GET(req: NextRequest) {
@@ -54,6 +55,6 @@ export async function GET(req: NextRequest) {
       data: serializeBigInt({ items: itemsWithStock, total, page, pageSize }) 
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return handleApiError(error);
   }
 }

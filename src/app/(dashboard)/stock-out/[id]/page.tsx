@@ -3,15 +3,18 @@
 export const dynamic = 'force-dynamic';
 
 import React, { useState, useEffect } from 'react';
-import { Card, Descriptions, Table, Tag, Typography, Button, Space, message, Spin } from 'antd';
+import { Card, Descriptions, Table, Tag, Typography, Button, Space, message, Spin, Modal } from 'antd';
 import AttachmentPanel from '@/components/ui/AttachmentPanel';
-import { PrinterOutlined, ArrowLeftOutlined } from '@ant-design/icons';
+import { PrinterOutlined, ArrowLeftOutlined, SendOutlined, AuditOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
 import { useRouter, useParams } from 'next/navigation';
 
 const { Title, Text } = Typography;
 
 const statusMap: Record<string, { label: string; color: string }> = {
   DRAFT: { label: '草稿', color: 'default' },
+  // v1.2.1：审批链上的 LOCKED / APPROVED 之前没有文案，状态列直接显示英文码
+  LOCKED: { label: '已锁定', color: 'processing' },
+  APPROVED: { label: '已审批', color: 'blue' },
   POSTED: { label: '已过账', color: 'green' },
   CANCELLED: { label: '已取消', color: 'red' },
 };
@@ -22,6 +25,8 @@ export default function StockOutDetailPage() {
   const id = params?.id;
   const [order, setOrder] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  // v1.2.1：审批链按钮共用一个 loading，避免连点重复提交
+  const [actionLoading, setActionLoading] = useState(false);
 
   useEffect(() => {
     if (id) fetchOrder();
@@ -44,20 +49,78 @@ export default function StockOutDetailPage() {
     }
   };
 
-  const handlePost = async () => {
+  /**
+   * v1.2.1：出库单推进动作统一入口（提交审批 / 审批 / 驳回取消 / 过账）
+   * 之前详情页没有任何推进按钮，单子 submit 后卡在 LOCKED，只能手改库。
+   */
+  const runAction = async (
+    url: string,
+    confirmMsg: string,
+    successMsg: string,
+    body?: any,
+  ) => {
+    const confirmed = await new Promise<boolean>((resolve) => {
+      Modal.confirm({
+        title: '确认操作',
+        content: confirmMsg,
+        okText: '确认',
+        cancelText: '取消',
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false),
+      });
+    });
+    if (!confirmed) return;
+
+    setActionLoading(true);
     try {
-      const res = await fetch('/api/stock-out/' + id + '/post', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        message.success('出库单已过账，库存已更新');
-        fetchOrder();
+      // 不传 body 时不要带 Content-Type，否则后端 json() 解析空串会报错
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = await res.json().catch(() => null);
+      if (data?.success) {
+        message.success(successMsg);
+        fetchOrder(); // 成功后刷新详情，按钮随状态切换
       } else {
-        message.error(data.error || '过账失败');
+        message.error(data?.error || `操作失败（HTTP ${res.status}）`);
       }
     } catch (e) {
-      message.error('过账失败');
+      message.error('网络错误，请稍后重试');
+    } finally {
+      setActionLoading(false);
     }
   };
+
+  const handleSubmit = () =>
+    runAction(
+      `/api/stock-out/${id}/submit`,
+      '提交后将锁定库存等待审批，确认提交？',
+      '已提交审批',
+    );
+
+  const handleApprove = () =>
+    runAction(
+      `/api/stock-out/${id}/approve`,
+      '审批通过后单据进入「已审批」，可继续过账。确认通过？',
+      '审批通过',
+      { approved: true },
+    );
+
+  const handleRejectCancel = () =>
+    runAction(
+      `/api/stock-out/${id}/cancel`,
+      '驳回并取消将释放该单已锁定的库存，取消后不可恢复，确认？',
+      '出库单已取消',
+    );
+
+  const handlePost = () =>
+    runAction(
+      `/api/stock-out/${id}/post`,
+      '过账后将按批次扣减库存且不可撤销，确认过账？',
+      '出库单已过账，库存已更新',
+    );
 
   const handlePrint = () => {
     const printWindow = window.open('', '_blank');
@@ -140,6 +203,13 @@ export default function StockOutDetailPage() {
 
   const items = order.outboundItems || order.items || [];
 
+  // v1.2.1：按状态给出可推进动作，POSTED / CANCELLED 为终态，只读
+  const status: string = order.status;
+  const canSubmit = status === 'DRAFT';
+  const canPost = status === 'DRAFT' || status === 'APPROVED';
+  const canApprove = status === 'LOCKED';
+  const readOnly = status === 'POSTED' || status === 'CANCELLED';
+
   const itemColumns = [
     { title: '序号', width: 60, render: (_: any, __: any, i: number) => i + 1 },
     { title: '商品编码', width: 120, render: (_: any, r: any) => r.product?.code || '-' },
@@ -157,7 +227,30 @@ export default function StockOutDetailPage() {
           <Button icon={<ArrowLeftOutlined />} onClick={() => router.push('/stock-out')}>返回</Button>
       <h4 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: "#0F172A", whiteSpace: "nowrap" }}>出库单详情</h4>
         </Space>
-        <Button icon={<PrinterOutlined />} onClick={handlePrint}>打印</Button>
+        <Space>
+          {readOnly && <Text type="secondary">该单已结束，只读</Text>}
+          {canSubmit && (
+            <Button type="primary" icon={<SendOutlined />} loading={actionLoading} onClick={handleSubmit}>
+              提交审批
+            </Button>
+          )}
+          {canApprove && (
+            <Button type="primary" icon={<CheckCircleOutlined />} loading={actionLoading} onClick={handleApprove}>
+              审批通过
+            </Button>
+          )}
+          {canApprove && (
+            <Button danger icon={<CloseCircleOutlined />} loading={actionLoading} onClick={handleRejectCancel}>
+              驳回并取消
+            </Button>
+          )}
+          {canPost && (
+            <Button type="primary" ghost icon={<AuditOutlined />} loading={actionLoading} onClick={handlePost}>
+              过账
+            </Button>
+          )}
+          <Button icon={<PrinterOutlined />} onClick={handlePrint}>打印</Button>
+        </Space>
       </div>
 
       <Card style={{ marginBottom: 16 }}>

@@ -1,4 +1,5 @@
 "use client";
+import { fetchAllPages } from '@/lib/fetch-all-pages';
 
 import React, { useState, useEffect } from "react";
 import { Card, Row, Col, Statistic, Table, Tag, Typography, List, Button, message, Input, Select, Descriptions, Modal } from "antd";
@@ -10,8 +11,19 @@ import {
 } from "@ant-design/icons";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
+import dayjs from "dayjs";
 
 const { Text } = Typography;
+
+/**
+ * F11 修复：工作台「预警Top」表的时间统一为 YYYY/MM/DD HH:mm:ss。
+ * 原来 new Date(v).toLocaleString() 跟随浏览器语言，英文环境会出 "10/30/2026, 11:36:41 AM"。
+ */
+function formatDateTime(value?: string | null) {
+  if (!value) return "-";
+  const d = dayjs(value);
+  return d.isValid() ? d.format("YYYY/MM/DD HH:mm:ss") : "-";
+}
 
 const BarChart = dynamic(() => import("recharts").then(m => m.BarChart), { ssr: false });
 const Bar = dynamic(() => import("recharts").then(m => m.Bar), { ssr: false });
@@ -46,22 +58,18 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    fetch("/api/inventory?pageSize=1000").then(r => r.json()).then(d => {
-      if (d.success) {
-        const items = d.data?.items || [];
-        const totalQty = items.reduce((s: number, i: any) => s + (Number(i.onHand) || 0), 0);
-        const totalValue = items.reduce((s: number, i: any) => s + ((Number(i.onHand) || 0) * (Number(i.avgCost) || 0)), 0);
-        setStats({ totalQty, totalValue, totalItems: items.length });
-      }
+    fetchAllPages<any>("/api/inventory").then((items) => {
+      const totalQty = items.reduce((s: number, i: any) => s + (Number(i.onHand) || 0), 0);
+      const totalValue = items.reduce((s: number, i: any) => s + ((Number(i.onHand) || 0) * (Number(i.avgCost) || 0)), 0);
+      setStats({ totalQty, totalValue, totalItems: items.length });
     }).catch(() => {});
 
     Promise.all([
       fetch("/api/warehouse").then(r => r.json()),
-      fetch("/api/inventory?pageSize=1000").then(r => r.json()),
-    ]).then(([whRes, invRes]) => {
+      fetchAllPages<any>("/api/inventory").catch(() => [] as any[]),
+    ]).then(([whRes, invItems]) => {
       if (whRes.success) {
         const whs = whRes.data || [];
-        const invItems = invRes.success ? (invRes.data?.items || []) : [];
         const whMap = new Map();
         whs.forEach((w: any) => whMap.set(Number(w.id), { key: w.id, name: w.name, products: 0, totalQty: 0, totalValue: 0 }));
         invItems.forEach((item: any) => {
@@ -130,11 +138,12 @@ export default function DashboardPage() {
   ];
 
   const alertColumns = [
-    { title: "商品", dataIndex: "productName", key: "productName", render: (_: any, r: any) => r.product?.name || r.productName || "-" },
+    // P1-2：商品列给定最小宽度，小屏靠横向滚动而不是把字挤成一列
+    { title: "商品", dataIndex: "productName", key: "productName", width: 160, render: (_: any, r: any) => r.product?.name || r.productName || "-" },
     { title: "类型", dataIndex: "title", key: "title", width: 90, render: (t: string) => <Tag>{t}</Tag> },
     { title: "级别", dataIndex: "level", key: "level", width: 80, render: (l: string) => <Tag color={l === "CRITICAL" ? "red" : l === "WARNING" ? "orange" : "blue"}>{l === "CRITICAL" ? "严重" : l === "WARNING" ? "警告" : "提示"}</Tag> },
     { title: "信息", dataIndex: "content", key: "content", ellipsis: true },
-    { title: "时间", dataIndex: "createdAt", key: "createdAt", width: 140, render: (v: string) => v ? new Date(v).toLocaleString() : "-" },
+    { title: "时间", dataIndex: "createdAt", key: "createdAt", width: 170, render: (v: string) => formatDateTime(v) },
   ];
 
   return (
@@ -262,7 +271,16 @@ export default function DashboardPage() {
         </Col>
         <Col xs={24} lg={12}>
           <Card title="预警Top" extra={<a href="/alerts" style={{ fontSize: 13 }}>查看全部</a>} styles={{ body: { padding: 0 } }}>
-            <Table columns={alertColumns} dataSource={alerts} rowKey="id" pagination={false} size="small" />
+            {/* P1-2：375/320px 下原表格把商品列压到 1 字符宽，文字一字一行。
+                给小屏一个最小总宽 + 横向滚动，列宽不再被挤扁；表头也保持单行。 */}
+            <Table
+              columns={alertColumns}
+              dataSource={alerts}
+              rowKey="id"
+              pagination={false}
+              size="small"
+              scroll={isMobile ? { x: 520 } : undefined}
+            />
           </Card>
         </Col>
       </Row>

@@ -60,4 +60,10 @@ export function glyphPath(ch: string): string | null {
   return d;
 }
 
+/** 直接取点阵（M6 光栅化用）：返回 7 行 x 5 列的 '0'/'1' 字符串数组 */
+export function glyphBitmap(ch: string): string[] | null {
+  const rows = GLYPHS[ch.toUpperCase()];
+  return rows ? rows.slice() : null;
+}
+
 export const CAPTCHA_CHARSET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";

@@ -1,3 +1,6 @@
+import { businessAccess, assertWarehouseAllowed } from '@/app/api/warehouse/access';
+import { withDocumentScope, assertDocumentAllowed } from '@/lib/data-scope';
+import { handleApiError } from '@/lib/errors';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
@@ -13,10 +16,8 @@ import { inboundPurchaseRequest } from '@/lib/purchase-inbound';
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const auth = await requireAuth();
-    const operatorId = auth.type === 'session'
-      ? (Number((auth.session.user as any).id) || undefined)
-      : (auth.userId || undefined);
+    const { scope, user } = await businessAccess('stock_in:create');
+    const operatorId = user.id;
     const id = BigInt(params.id);
     const body = await req.json();
     const { inbound, warehouseId, locationId, boxId, unitCost } = body;
@@ -26,6 +27,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ success: false, error: '申请不存在' }, { status: 404 });
     }
     // 流转顺序：提交(PENDING) → 购买中(PURCHASING) → 购买完成(COMPLETED) → 入库
+    await assertDocumentAllowed(scope, user, { ...request, operatorId: request.applicantId });
+    if (warehouseId) await assertWarehouseAllowed(scope, Number(warehouseId));
     if (request.status !== 'PURCHASING') {
       return NextResponse.json({ success: false, error: '只有采购中的申请才能标记购买完成' }, { status: 400 });
     }
@@ -68,6 +71,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       message: `购买完成，已入库（入库单 ${order.orderNo}）`,
     }));
   } catch (error: any) {
-    return authErrorResponse(error);
+    return handleApiError(error);
   }
 }

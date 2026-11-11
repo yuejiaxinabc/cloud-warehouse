@@ -8,6 +8,35 @@ function addSecurityHeaders(response: NextResponse, isHttps: boolean): NextRespo
   response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
   response.headers.set('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=(), usb=()');
+  // v1.2.5（P3-6）：CSP 拆成两条发。
+  //
+  // 原实现整条 Report-Only，等于对 XSS 没有任何拦截力。但直接全量 enforce 会打挂页面：
+  // Next 的水合脚本是内联的，antd 也注入了内联样式，去掉 'unsafe-inline' 就白屏。
+  //
+  // 折中且真实有效：把「不依赖内联、一改就能拦住实际攻击」的指令立刻生效
+  // （frame-ancestors / base-uri / form-action / object-src），
+  // 剩下的 default-src/script-src/style-src 继续 Report-Only 观察，
+  // 等把 nonce 改造做完（需 Next 中间件配合）再合并成一条。
+  response.headers.set(
+    'Content-Security-Policy',
+    "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+  );
+  response.headers.set(
+    'Content-Security-Policy-Report-Only',
+    [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob:",
+      "font-src 'self' data:",
+      "connect-src 'self'",
+      "media-src 'self' blob:",
+      "frame-ancestors 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "object-src 'none'",
+    ].join('; ')
+  );
   // FIX-2026-1022：管理后台页面禁止缓存。
   // Next 默认给页面发 s-maxage=31536000，入库/改库存后前端仍拿旧数据，
   // 看起来像「数据没进去」。页面和接口一律 no-store。
@@ -124,9 +153,17 @@ export async function middleware(request: NextRequest) {
   }
 
   // === 速率限制（在认证检查之前） ===
+  // v1.2.1：原先 /api/auth/* 一把抓 30 次/分，把每次翻页都会请求的
+  // /api/auth/session、/api/auth/csrf、/api/auth/providers 也算进去，
+  // 正常浏览 20 多页就会 429 → 前端 next-auth 报 CLIENT_FETCH_ERROR、页面不再渲染。
+  // 现在拆桶：会话类只读接口单独放宽（600 次/分），只有真正会被爆破的
+  // 登录/验证码/重置密码路径保留 30 次/分的严格阈值。
   if (pathname.startsWith('/api/auth')) {
-    const key = getRateLimitKey(request, 'auth');
-    if (!checkRateLimit(key, 30, 60 * 1000)) {
+    const SESSION_LIKE = new Set(['/api/auth/session', '/api/auth/csrf', '/api/auth/providers']);
+    const isSessionLike = SESSION_LIKE.has(pathname) && (request.method === 'GET' || request.method === 'HEAD');
+    const limit = isSessionLike ? 600 : 30;
+    const key = getRateLimitKey(request, isSessionLike ? 'auth-session' : 'auth');
+    if (!checkRateLimit(key, limit, 60 * 1000)) {
       return NextResponse.json(
         { success: false, error: '请求过于频繁，请稍后再试' },
         { status: 429, headers: { 'Retry-After': '60' } }
@@ -184,9 +221,25 @@ export async function middleware(request: NextRequest) {
     // （现代浏览器跨站 POST 必带 Origin，且 SameSite=Lax 不发送 cookie）。
   }
 
+  // Overwrite client-supplied routing hints; Node guards use these for GET policies.
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set('x-cw-path', pathname);
+  requestHeaders.set('x-cw-method', request.method);
+  const next = () => NextResponse.next({ request: { headers: requestHeaders } });
+
   // NextAuth 内部路由放行
   if (pathname.startsWith("/api/auth/")) {
-    return NextResponse.next();
+    return next();
+  }
+
+  // P3-8：URL 大小写敏感。/Products 与 /products 在 Next 里是两条路由语义，
+  // 前者会 404，用户手打或从旧链接进来就像"页面没了"。这里把页面路径统一 308 到小写。
+  // 只处理页面：/api 大小写是契约的一部分，不能擅自改写。
+  if (!pathname.startsWith("/api/") && /[A-Z]/.test(pathname)) {
+    // 注意：不能直接 clone(request.nextUrl) —— 那会把内部地址（127.0.0.1:3000）写进 Location，
+    // 浏览器拿到会去连本机端口。用对外 origin 拼，和登录跳转同一套逻辑。
+    const origin = getRequestOrigin(request);
+    return NextResponse.redirect(origin + pathname.toLowerCase() + request.nextUrl.search, 308);
   }
 
   // 公开 API —— 精确匹配，避免前缀把未来新增路由一起放开
@@ -198,16 +251,18 @@ export async function middleware(request: NextRequest) {
     "/api/auth/admin-reset",
     "/api/settings/system",
     "/api/v1/mp/login",
+    // 登录页「一言」：登录前就要能取，且只返回一句公开文案
+    "/api/hitokoto",
   ]);
   if (PUBLIC_API_EXACT.has(pathname)) {
-    return addSecurityHeaders(NextResponse.next(), https);
+    return addSecurityHeaders(next(), https);
   }
 
   // API 路由认证检查
   if (pathname.startsWith("/api/")) {
     const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
-    if (token) {
-      return addSecurityHeaders(NextResponse.next(), https);
+    if (token && Number.isInteger(token.sessionVersion)) {
+      return addSecurityHeaders(next(), https);
     }
     // /api/v1/* 的路由内部自带 token 校验，middleware 仅放行到路由层；
     // 其余路径只认 NextAuth 会话（FIX-2026-1001）。
@@ -216,7 +271,7 @@ export async function middleware(request: NextRequest) {
       !!request.headers.get("x-api-token") ||
       !!request.nextUrl.searchParams.get("token");
     if (hasTokenHeader && pathname.startsWith("/api/v1/")) {
-      return addSecurityHeaders(NextResponse.next(), https);
+      return addSecurityHeaders(next(), https);
     }
     return addSecurityHeaders(
       NextResponse.json({ success: false, error: "请先登录" }, { status: 401 }),
@@ -228,19 +283,17 @@ export async function middleware(request: NextRequest) {
   const sessionToken = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
   const PUBLIC_PAGES = ["/login", "/reset-password", "/terms", "/privacy"];
   if (PUBLIC_PAGES.some(p => pathname.startsWith(p))) {
-    if (sessionToken && pathname === "/login") {
-      return NextResponse.redirect(new URL("/", getRequestOrigin(request)));
-    }
-    return addSecurityHeaders(NextResponse.next(), https);
+    // A JWT cookie alone does not prove an active account. Keep login reachable.
+    return addSecurityHeaders(next(), https);
   }
 
   if (!sessionToken) {
     return NextResponse.redirect(new URL("/login", getRequestOrigin(request)));
   }
 
-  return addSecurityHeaders(NextResponse.next(), https);
+  return addSecurityHeaders(next(), https);
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:png|jpg|jpeg|svg|gif|webp|ico|css|js|html|txt|woff2?|mp4|webm)).*)"],
+  matcher: ["/api/:path*", "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:png|jpg|jpeg|svg|gif|webp|ico|css|js|html|txt|woff2?|mp4|webm)).*)"],
 };

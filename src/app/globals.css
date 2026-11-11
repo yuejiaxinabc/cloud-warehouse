@@ -22,11 +22,13 @@
   --border: #E2E8F0;
   --border-light: #F1F5F9;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.06);
-  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.08);
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+  --shadow-md: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 16px rgba(16, 24, 40, 0.04);
+  --shadow-lg: 0 2px 6px rgba(16, 24, 40, 0.05), 0 16px 32px -12px rgba(16, 24, 40, 0.16);
+  /* 苹果风圆角（1.2.4）：卡片 22px、按钮/输入 12px、弹窗 24px；手机端不小于 16px */
+  --radius-sm: 12px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
+  --radius-xl: 24px;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -275,7 +277,7 @@ html, body {
    弹窗系统
    ============================================ */
 .ant-modal-content {
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
   overflow: hidden;
 }
@@ -485,9 +487,9 @@ html, body {
    移动端响应式
    ============================================ */
 @media (max-width: 768px) {
-  /* 卡片 */
+  /* 卡片：手机端圆角不小于 16px（!important 以压过 v1.1.1 的 !important 规则） */
   .ant-card {
-    border-radius: var(--radius-md);
+    border-radius: 18px !important;
   }
   .ant-card-head {
     padding: 0 12px;
@@ -527,7 +529,7 @@ html, body {
     margin: 8px auto;
   }
   .ant-modal-content {
-    border-radius: var(--radius-md);
+    border-radius: 20px !important;
   }
   .ant-modal-header {
     padding: 16px 16px 12px;
@@ -675,11 +677,13 @@ h1, h2, h3, h4, h5, h6, p, span, div, td, th, label, button {
   --text-muted: #93A0B4;
   --border: #E7EBF0;
   --border-light: #F0F3F7;
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
+  --radius-sm: 12px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
+  --radius-xl: 24px;
   --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
-  --shadow-md: 0 4px 16px rgba(16, 24, 40, 0.06);
+  --shadow-md: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 16px rgba(16, 24, 40, 0.04);
+  --shadow-lg: 0 2px 6px rgba(16, 24, 40, 0.05), 0 16px 32px -12px rgba(16, 24, 40, 0.16);
   --layout-max: 1560px;
 }
 
@@ -849,9 +853,9 @@ h1, h2, h3, h4, h5, h6, p, span, div, td, th, label, button {
   border: 1px solid var(--border) !important;
   box-shadow: var(--shadow-sm) !important;
 }
-.ant-card:hover { box-shadow: var(--shadow-md) !important; }
+.ant-card:hover { box-shadow: var(--shadow-lg) !important; transform: translateY(-2px); }
 .ant-card-body { padding: 18px 20px; }
-.ant-modal-content, .ant-drawer-content { border-radius: var(--radius-lg) !important; }
+.ant-modal-content, .ant-drawer-content { border-radius: var(--radius-xl) !important; }
 .ant-form-item-label > label { font-size: 13px !important; color: var(--text-secondary) !important; }
 .ant-btn { font-weight: 500; }
 .ant-btn-primary { box-shadow: 0 1px 2px rgba(37,99,235,.24); }
@@ -892,6 +896,7 @@ h1, h2, h3, h4, h5, h6, p, span, div, td, th, label, button {
   display: flex;
   min-height: 100dvh;
   background: #fff;
+  position: relative;
 }
 .yc-login-aside {
   display: none;
@@ -956,6 +961,8 @@ h1, h2, h3, h4, h5, h6, p, span, div, td, th, label, button {
   transition: border-color .15s ease;
 }
 .yc-captcha:hover { border-color: #BFDBFE; }
+.yc-captcha:focus-visible { outline: 3px solid #2563EB; outline-offset: 3px; }
+.yc-captcha:disabled { cursor: wait; opacity: .65; }
 .yc-login-agree { display: flex; gap: 8px; align-items: flex-start; margin-top: 4px; }
 .yc-login-agree label { font-size: 12px; color: var(--text-secondary); line-height: 18px; cursor: pointer; }
 .yc-login-agree a { color: var(--primary); margin: 0 3px; }
@@ -963,6 +970,71 @@ h1, h2, h3, h4, h5, h6, p, span, div, td, th, label, button {
   margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border-light);
   display: flex; flex-direction: column; gap: 4px;
   font-size: 11px; color: var(--text-muted);
+}
+
+/* ---------- 登录页动效（对齐 scaffold-master：里程表读数 / 光球收拢 / 卡片弹射） ---------- */
+
+/* 里程表：每一位是一条 0–9 竖带，只有变化的位会滚 */
+.tnum, .yc-odo { font-variant-numeric: tabular-nums; }
+.yc-odo { display: inline-flex; align-items: baseline; line-height: 1; }
+.yc-odo-cell { position: relative; display: inline-block; height: 1em; overflow: hidden; }
+.yc-odo-cell.is-sep { overflow: visible; }
+.yc-odo-strip { display: flex; flex-direction: column; transition: transform .9s cubic-bezier(.16, 1, .3, 1); }
+.yc-odo-strip > span { display: block; height: 1em; line-height: 1; text-align: center; }
+
+/* 左侧仪表时钟 */
+.yc-login-dial { margin-top: 28px; display: flex; flex-direction: column; gap: 8px; }
+.yc-login-dial .yc-odo {
+  font-size: 34px; font-weight: 650; letter-spacing: 1.5px; color: #fff;
+  text-shadow: 0 0 26px rgba(96, 165, 250, .45);
+}
+.yc-login-dial-date { font-size: 11px; letter-spacing: 1.8px; color: rgba(255, 255, 255, .52); text-transform: uppercase; }
+
+/* 提交区：登录按钮 ↔ 成功光球 */
+.yc-login-submit-slot { display: flex; align-items: center; min-height: 44px; }
+.yc-success-orb {
+  width: 46px; height: 46px; flex: none; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--primary); color: #fff;
+  box-shadow: 0 14px 30px -12px rgba(37, 99, 235, .75);
+  animation:
+    yc-orb-gather .42s cubic-bezier(.455, .03, .515, .955) both,
+    yc-orb-pop .46s .42s cubic-bezier(.34, 1.56, .64, 1) both;
+}
+.yc-success-orb svg { flex: none; }
+.yc-success-orb circle {
+  fill: none; stroke: rgba(255, 255, 255, .55); stroke-width: 2.4;
+  transform: rotate(-90deg); transform-origin: 50% 50%;
+  animation: yc-orb-ring .5s .08s cubic-bezier(.16, 1, .3, 1) both;
+}
+.yc-success-orb path {
+  fill: none; stroke: #fff; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round;
+  animation: yc-orb-check .32s .22s cubic-bezier(.34, 1.56, .64, 1) both;
+}
+@keyframes yc-orb-gather {
+  from { width: 100%; border-radius: 12px; }
+  to   { width: 46px; border-radius: 999px; }
+}
+@keyframes yc-orb-pop {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+@keyframes yc-orb-ring { from { stroke-dashoffset: 126; } to { stroke-dashoffset: 0; } }
+@keyframes yc-orb-check { from { stroke-dashoffset: 24; } to { stroke-dashoffset: 0; } }
+
+/* 卡片弹射归位：从下方弹入、轻微过冲后落定 */
+.yc-login-card { animation: yc-card-launch .8s cubic-bezier(.16, 1, .3, 1) both; }
+@keyframes yc-card-launch {
+  0%   { opacity: 0; transform: translateY(34px) scale(.94); }
+  72%  { opacity: 1; transform: translateY(-8px) scale(1.012); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .yc-login-card { animation: none; }
+  .yc-success-orb, .yc-success-orb circle, .yc-success-orb path { animation: none; }
+  .yc-odo-strip { transition: none; }
 }
 
 
@@ -1142,4 +1214,550 @@ h1, h2, h3, h4, h5, h6, p, span, div, td, th, label, button {
 .yc-screen-tip-row .dot.in { background: #2563EB; }
 .yc-screen-tip-row .dot.out { background: #059669; }
 .yc-screen-tip-row .dot.tr { background: #7C3AED; }
+
+
+
+/* ============================================================
+   v1.2.4 苹果风 UI 系统（分工 A）
+   大圆角 22/12/24 · 柔和阴影 · 入场 stagger · 全设备自适应
+   与 tailwind.config.ts、AntdRegistry appleTheme 同一套数值
+   ============================================================ */
+
+/* ---------- 卡片入场动画：淡入 + 上移，stagger 交错 ---------- */
+@keyframes yc-fade-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.yc-fade-up {
+  animation: yc-fade-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+/* 容器直系子元素依次入场（60ms 步进，最多 8 个，之后不再递增）；
+   选择器特意写成 .yc-content.yc-stagger 以压过旧的 .ant-layout-content > div 入场动画 */
+.yc-content.yc-stagger > * { animation: yc-fade-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.yc-content.yc-stagger > *:nth-child(1) { animation-delay: 0ms; }
+.yc-content.yc-stagger > *:nth-child(2) { animation-delay: 60ms; }
+.yc-content.yc-stagger > *:nth-child(3) { animation-delay: 120ms; }
+.yc-content.yc-stagger > *:nth-child(4) { animation-delay: 180ms; }
+.yc-content.yc-stagger > *:nth-child(5) { animation-delay: 240ms; }
+.yc-content.yc-stagger > *:nth-child(6) { animation-delay: 300ms; }
+.yc-content.yc-stagger > *:nth-child(7) { animation-delay: 360ms; }
+.yc-content.yc-stagger > *:nth-child(8) { animation-delay: 420ms; }
+
+/* 卡片悬停上浮 + 阴影加深（触屏除外，见下方移动端覆盖） */
+.ant-card,
+.kpi-card {
+  transition: box-shadow 0.25s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.25s ease;
+}
+@media (hover: hover) {
+  .ant-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lg) !important;
+  }
+}
+
+/* ---------- 响应式网格：手机单列 / 平板两列 / 桌面 3-4 列 ---------- */
+.yc-kpi-grid,
+.yc-card-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+@media (min-width: 768px) {
+  .yc-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .yc-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (min-width: 1024px) {
+  .yc-card-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (min-width: 1440px) {
+  .yc-kpi-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .yc-card-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* ---------- 防溢出：不写死固定宽度，内容区/卡片可收缩 ---------- */
+.yc-content,
+.yc-content > *,
+.ant-card,
+.ant-modal,
+.ant-drawer-content {
+  min-width: 0;
+}
+img, video, canvas, svg { max-width: 100%; }
+/* 表格横滑只在有数据、确实放不下时出现；空表不产生横向滚动条 */
+.ant-table-wrapper { overflow-x: auto; }
+.yc-table-wrap--empty { overflow-x: hidden; }
+.yc-table-wrap--empty .ant-table-content { overflow-x: hidden !important; }
+
+/* ---------- 毛玻璃顶栏（强化） ---------- */
+.yc-header {
+  background: rgba(255, 255, 255, 0.72) !important;
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+}
+/* 独立 Header 组件（components/layout/Header.tsx）共用同一套毛玻璃 */
+.yc-header-standalone {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid var(--border);
+}
+@media (max-width: 767px) {
+  .yc-header-standalone { padding: 0 12px !important; }
+}
+
+/* ---------- 侧边栏：菜单分组文字不截断，品牌与底部完整显示 ---------- */
+.yc-menu .ant-menu-item,
+.yc-menu .ant-menu-submenu-title {
+  white-space: nowrap;
+}
+.yc-menu .ant-menu-title-content {
+  overflow: visible;
+  text-overflow: clip;
+}
+.yc-nav-brand-inner > div { min-width: 0; }
+.yc-nav-foot {
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.yc-nav-foot span { white-space: nowrap; }
+/* 移动端抽屉：右侧大圆角 + 底部安全区 */
+.yc-mobile-drawer .ant-drawer-content { border-radius: 0 24px 24px 0 !important; }
+.yc-mobile-drawer .ant-drawer-body {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* ---------- 空状态 ---------- */
+.yc-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 40px 16px;
+  width: 100%;
+  min-width: 0;
+}
+.yc-empty-state p { max-width: 420px; }
+
+/* ---------- 骨架屏 ---------- */
+.yc-skeleton-grid { width: 100%; }
+.yc-skeleton-table { width: 100%; min-width: 0; }
+
+/* ---------- 移动端：禁用悬停上浮，避免点按后阴影残留 ---------- */
+@media (max-width: 767px) {
+  .ant-card:hover,
+  .kpi-card:hover {
+    transform: none;
+    box-shadow: var(--shadow-sm) !important;
+  }
+  .yc-content { padding: 12px; }
+  .yc-page-head { margin-bottom: 12px; }
+  .yc-page-title { font-size: 18px; }
+}
+
+/* ---------- 尊重 prefers-reduced-motion：禁用全部动效 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+  .yc-fade-up,
+  .yc-content.yc-stagger > *,
+  .ant-layout-content > div,
+  .yc-login-card {
+    animation: none !important;
+  }
+}
+
+/* ---------- 登录页 1.2.4 精修：玻璃卡片 / 圆形提交按钮 / 按需两步验证 ---------- */
+
+/* 卡片：外柔光 + 内高光，比纯白卡片更有层次 */
+.yc-login-card {
+  position: relative;
+  border-radius: 24px;
+  background:
+    radial-gradient(120% 90% at 50% -10%, rgba(37, 99, 235, .06), transparent 60%),
+    #fff;
+  border: 1px solid rgba(226, 232, 240, .9);
+  box-shadow:
+    0 1px 2px rgba(16, 24, 40, .04),
+    0 18px 40px -18px rgba(16, 24, 40, .22),
+    0 40px 80px -50px rgba(37, 99, 235, .35);
+}
+.yc-login-card::before {
+  content: "";
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(160deg, rgba(37, 99, 235, .28), rgba(37, 99, 235, 0) 42%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* 段落间距与标题更透气 */
+.yc-login-title { font-size: 26px; letter-spacing: -.4px; }
+.yc-login-sub { margin: 6px 0 24px; }
+
+/* 输入框：聚焦时轻微上浮 + 蓝色光环 */
+.yc-login-card .ant-input-affix-wrapper,
+.yc-login-card .ant-input {
+  border-radius: 12px;
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+.yc-login-card .ant-input-affix-wrapper:focus-within,
+.yc-login-card .ant-input:focus {
+  border-color: #2563EB;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, .12);
+  transform: translateY(-1px);
+}
+
+/* 提交区：圆形按钮居中 */
+.yc-login-submit-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 84px;
+  margin: 6px 0 2px;
+}
+.yc-login-go {
+  position: relative;
+  width: 64px; height: 64px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 999px; cursor: pointer;
+  color: #fff; font-size: 22px;
+  background: linear-gradient(160deg, #3B82F6 0%, #2563EB 55%, #1D4ED8 100%);
+  box-shadow:
+    0 10px 24px -8px rgba(37, 99, 235, .65),
+    0 2px 6px rgba(37, 99, 235, .30),
+    inset 0 1px 0 rgba(255, 255, 255, .28);
+  transition: transform .22s cubic-bezier(.34, 1.56, .64, 1), box-shadow .22s ease;
+}
+.yc-login-go:hover:not(:disabled) {
+  transform: translateY(-2px) scale(1.05);
+  box-shadow:
+    0 16px 34px -10px rgba(37, 99, 235, .72),
+    0 3px 8px rgba(37, 99, 235, .34),
+    inset 0 1px 0 rgba(255, 255, 255, .32);
+}
+.yc-login-go:active:not(:disabled) { transform: scale(.96); }
+.yc-login-go:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 4px rgba(37, 99, 235, .28),
+    0 12px 28px -10px rgba(37, 99, 235, .7);
+}
+.yc-login-go:disabled { cursor: progress; opacity: .9; }
+/* 外圈呼吸光环 */
+.yc-login-go-ring {
+  position: absolute; inset: -6px;
+  border-radius: inherit;
+  border: 1px solid rgba(37, 99, 235, .35);
+  animation: yc-go-breathe 2.6s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes yc-go-breathe {
+  0%, 100% { opacity: .55; transform: scale(1); }
+  50%      { opacity: 0;   transform: scale(1.18); }
+}
+.yc-login-go-spinner {
+  width: 20px; height: 20px; border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, .45);
+  border-top-color: #fff;
+  animation: yc-go-spin .8s linear infinite;
+}
+@keyframes yc-go-spin { to { transform: rotate(360deg); } }
+
+/* 按需两步验证：淡入出现 */
+.yc-login-totp { animation: yc-totp-in .28s ease both; }
+@keyframes yc-totp-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.yc-login-totp-toggle {
+  display: block; width: 100%; margin: -4px 0 8px;
+  background: none; border: 0; padding: 4px;
+  font-size: 12px; color: #64748B; cursor: pointer;
+  transition: color .18s ease;
+}
+.yc-login-totp-toggle:hover:not(:disabled) { color: #2563EB; }
+.yc-login-totp-toggle:disabled { cursor: default; opacity: .7; }
+.yc-login-totp-toggle:focus-visible { outline: 2px solid rgba(37, 99, 235, .45); border-radius: 6px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .yc-login-go, .yc-login-go-ring, .yc-login-totp { animation: none; transition: none; }
+}
+
+@media (max-width: 480px) {
+  .yc-login-go { width: 58px; height: 58px; }
+  .yc-login-submit-slot { min-height: 74px; }
+}
+
+
+/* ---------- 登录页问候语与「一言」---------- */
+.yc-login-greeting {
+  background: linear-gradient(120deg, #2563EB 0%, #1D4ED8 55%, #3B82F6 100%);
+  -webkit-background-clip: text;
+          background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.yc-login-quote {
+  margin: -10px 0 16px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: #7C8798;
+  font-style: italic;
+  animation: yc-quote-in .5s ease both;
+}
+.yc-login-quote-from {
+  display: block;
+  margin-top: 2px;
+  font-style: normal;
+  font-size: 11.5px;
+  color: #A2ACBC;
+  text-align: right;
+}
+@keyframes yc-quote-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .yc-login-quote { animation: none; }
+}
+
+
+/* ---------- 登录表单紧凑化（1.2.4 反馈） ---------- */
+/* antd vertical 布局默认每项 24px，视觉上过于松散；这里整体收一档 */
+.yc-login-card .ant-form-vertical .ant-form-item {
+  margin-bottom: 12px;
+}
+.yc-login-card .ant-form-item:last-of-type {
+  margin-bottom: 0;
+}
+/* label 与输入框贴紧一点 */
+.yc-login-card .ant-form-item-label {
+  padding-bottom: 4px;
+}
+.yc-login-card .ant-form-item-label > label {
+  font-size: 13px;
+  height: auto;
+  line-height: 1.5;
+}
+/* 说明文字（验证码状态、两步验证提示）更靠近控件 */
+.yc-login-card .ant-form-item-extra {
+  font-size: 11.5px;
+  min-height: 0;
+  margin-top: 3px;
+  line-height: 1.5;
+}
+/* 输入框高度略收，控件之间更紧凑 */
+.yc-login-card .ant-input,
+.yc-login-card .ant-input-affix-wrapper {
+  min-height: 40px;
+}
+/* 卡片内边距与标题间距同步收紧 */
+.yc-login-card {
+  padding: 26px 26px 22px;
+}
+.yc-login-title {
+  font-size: 24px;
+  margin-bottom: 2px;
+}
+.yc-login-sub {
+  margin: 4px 0 16px;
+}
+.yc-login-brand-sm {
+  margin-bottom: 16px;
+}
+/* 提交区：圆形按钮上下留白收一档 */
+.yc-login-submit-slot {
+  min-height: 76px;
+  margin: 2px 0 0;
+}
+/* 底部协议、联系方式区同样收紧 */
+.yc-login-agree {
+  margin-top: 2px;
+}
+.yc-login-foot {
+  margin-top: 12px;
+  padding-top: 10px;
+}
+@media (max-width: 480px) {
+  .yc-login-card { padding: 22px 18px 18px; }
+  .yc-login-submit-slot { min-height: 70px; }
+}
+
+
+/* ---------- 登录表单再收一档（第二版反馈） ---------- */
+.yc-login-card .ant-form-vertical .ant-form-item { margin-bottom: 10px; }
+.yc-login-card .ant-form-item-label { padding-bottom: 3px; }
+.yc-login-card { padding: 24px 26px 18px; }
+.yc-login-title { font-size: 23px; }
+.yc-login-sub { margin: 3px 0 12px; }
+.yc-login-quote { margin: -4px 0 12px; }
+.yc-login-brand-sm { margin-bottom: 14px; }
+.yc-login-submit-slot { min-height: 66px; }
+.yc-login-agree { margin-top: 0; }
+.yc-login-foot { margin-top: 10px; padding-top: 8px; }
+.yc-login-card .ant-input,
+.yc-login-card .ant-input-affix-wrapper { min-height: 38px; }
+@media (max-width: 480px) {
+  .yc-login-card { padding: 20px 16px 16px; }
+  .yc-login-submit-slot { min-height: 62px; }
+}
+
+
+/* ---------- 去掉副标题后的间距衔接 ---------- */
+/* 副标题删掉后标题直接接「一言」或表单，这里把呼吸感补回来 */
+.yc-login-title { margin: 0 0 16px; }
+.yc-login-quote { margin: -4px 0 14px; }
+/* 没有一言时（离线/取不到），标题与第一个表单项之间留出间距 */
+.yc-login-title + .ant-form { margin-top: 4px; }
+
+
+/* ============================================================
+   v1.2.5 可用性修复（来自 2026-11-11 站点测试问题清单）
+   ============================================================ */
+
+/* P2-4：移动端触控目标统一放大到 >=40px 热区。
+   只放大"可点区域"，不放大视觉尺寸，避免桌面端变胖。 */
+@media (max-width: 768px) {
+  .ant-pagination-item,
+  .ant-pagination-prev,
+  .ant-pagination-next,
+  .ant-pagination-jump-prev,
+  .ant-pagination-jump-next {
+    min-width: 40px;
+    height: 40px;
+    line-height: 40px;
+  }
+  .ant-pagination-prev .ant-pagination-item-link,
+  .ant-pagination-next .ant-pagination-item-link {
+    height: 40px;
+    line-height: 40px;
+  }
+  /* 复选框：视觉不变，热区补足 */
+  .ant-checkbox-wrapper { padding: 8px 6px; margin-inline-start: 0 !important; }
+  .ant-checkbox-inner { width: 20px; height: 20px; }
+  .ant-checkbox-inner::after { width: 6px; height: 11px; }
+  /* 顶栏图标按钮 */
+  .ant-layout-header .ant-btn,
+  .ant-layout-header .anticon { min-width: 40px; min-height: 40px; }
+  /* 表格内的行内操作按钮 */
+  .ant-table-tbody .ant-btn-sm { min-height: 34px; padding-inline: 10px; }
+}
+
+/* P2-5：键盘焦点可见。原实现给链接 outline:none 且没有替代态，
+   键盘用户完全看不到自己在哪。这里统一补 :focus-visible，
+   鼠标点击不触发（:focus-visible 只在键盘/辅助技术导航时出现）。 */
+a:focus-visible,
+button:focus-visible,
+.ant-btn:focus-visible,
+.ant-menu-item:focus-visible,
+.ant-select-selector:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid #2563EB;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+/* 输入框在键盘聚焦时也用统一的环，避免和 antd 的 box-shadow 打架 */
+.ant-input:focus-visible,
+.ant-input-affix-wrapper:focus-within {
+  outline: 2px solid rgba(37, 99, 235, .45);
+  outline-offset: 1px;
+}
+
+/* P2-3：表格横向滚动可见化。
+   移动端列多时给一个右侧渐隐，暗示"还能往右滑"，
+   并在表格底部留 4px 滚动条高度（iOS 默认隐藏滚动条，用户无从得知）。 */
+.ant-table-wrapper .ant-table-content,
+.ant-table-wrapper .ant-table-body {
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+.ant-table-wrapper .ant-table-content::-webkit-scrollbar,
+.ant-table-wrapper .ant-table-body::-webkit-scrollbar {
+  height: 6px;
+}
+.ant-table-wrapper .ant-table-content::-webkit-scrollbar-thumb,
+.ant-table-wrapper .ant-table-body::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, .45);
+  border-radius: 3px;
+}
+@media (max-width: 768px) {
+  .ant-table-wrapper { position: relative; }
+  .ant-table-wrapper::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 22px;
+    bottom: 8px;
+    pointer-events: none;
+    background: linear-gradient(to right, rgba(255,255,255,0), rgba(255,255,255,.92));
+    border-radius: 0 8px 8px 0;
+  }
+  /* 防止关键列被挤成单字符竖排 */
+  .ant-table-cell { white-space: nowrap; }
+}
+
+/* P3-9：登录按钮补文字语义后可读性 */
+.yc-login-go[aria-label] { /* 保持视觉不变，仅承载语义 */ }
+
+
+/* ---------- 侧栏版本提示（发现新版本） ---------- */
+.yc-update-pill {
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 1.4;
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: #fff;
+  background: linear-gradient(120deg, #F97316, #EF4444);
+  box-shadow: 0 4px 12px -4px rgba(239, 68, 68, .55);
+  animation: yc-update-pulse 2.4s ease-in-out infinite;
+}
+.yc-update-pill:hover { filter: brightness(1.06); }
+.yc-update-pill:focus-visible { outline: 2px solid #FDBA74; outline-offset: 2px; }
+@keyframes yc-update-pulse {
+  0%, 100% { box-shadow: 0 4px 12px -4px rgba(239, 68, 68, .55); }
+  50%      { box-shadow: 0 6px 18px -4px rgba(239, 68, 68, .85); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .yc-update-pill { animation: none; }
+}
+/* 侧栏底部在两行内容时也保持对齐 */
+.yc-nav-foot { flex-wrap: wrap; gap: 6px 10px; }
+
+
+/* ---------- 检查更新：当前版本 / 下一版本 区块 ---------- */
+.yc-update-block {
+  border: 1px solid #E7EBF0;
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: #FBFCFE;
+}
+.yc-update-block-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.yc-update-block-next {
+  border-color: #FBD5D5;
+  background: #FFFBFB;
+}
+.yc-update-latest {
+  border-color: #D7F0DE;
+  background: #F7FDF9;
+}
 

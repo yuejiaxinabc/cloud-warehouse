@@ -156,7 +156,8 @@ export default function InventoryAnalysisPage() {
                 <>
                   <Alert type="info" showIcon style={{ marginBottom: 12 }}
                     message="低于安全库存的商品"
-                    description="建议补货量按「目标库存（上限库存/安全库存×2）− 现有库存」计算，可直接据此生成采购申请。" />
+                    description="建议补货量按「目标库存（上限库存/安全库存×2）− 现有库存」计算。预计金额为 0.00 的行没有可计价的成本，不能直接转采购；需要生成采购申请时，请到预警中心勾选后生成。"
+                    action={<Button size="small" type="primary" onClick={() => { window.location.href = '/alerts'; }}>去预警中心生成采购申请</Button>} />
                   <Table rowKey={(r: any) => r.productCode + r.warehouseName} size="small" loading={loading}
                     columns={replCols as any} dataSource={data?.rows || []} pagination={{ pageSize: 20 }} scroll={{ x: 900 }} />
                 </>

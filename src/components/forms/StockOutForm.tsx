@@ -64,6 +64,7 @@ const StockOutForm: React.FC<StockOutFormProps> = ({
       render: () => (
         <Select
           placeholder="选择商品"
+          aria-label="商品"
           style={{ width: '100%' }}
           showSearch
           options={[
@@ -117,6 +118,7 @@ const StockOutForm: React.FC<StockOutFormProps> = ({
       render: () => (
         <Select
           placeholder="选择库位"
+          aria-label="库位"
           style={{ width: '100%' }}
           options={[
             { label: 'A-01-01', value: 'loc1' },
@@ -158,7 +160,8 @@ const StockOutForm: React.FC<StockOutFormProps> = ({
     <div>
       {/* 表头信息 */}
       <Card title="单据信息" style={{ marginBottom: 16, borderRadius: 8 }}>
-        <Form form={form} layout="vertical" initialValues={initialValues}>
+        {/* L6：Form 加 name 后字段 id 带前缀（stockOutForm_warehouseId），避免与其它表单 id 冲突 */}
+        <Form form={form} name="stockOutForm" layout="vertical" initialValues={initialValues}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0 24px' }}>
             <Form.Item
               name="type"

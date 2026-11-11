@@ -1,13 +1,18 @@
+import { getDataScope, withWarehouseScope, withDocumentScope } from '@/lib/data-scope';
+import { requireAuth, requirePermission } from '@/lib/auth-guard';
 import { NextRequest } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { successResponse, errorResponse, handleApiError, parsePagination } from '@/lib/errors';
+import { formatMoney } from '@/lib/utils';
 
 export async function GET(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) return errorResponse('请先登录', 401);
+    const auth = await requireAuth(request);
+    await requirePermission('report:view', auth);
+    const scope = await getDataScope(auth.user);
+    const inventoryWhere = withWarehouseScope({}, scope);
+    const documentWhere = withDocumentScope({}, scope, auth.user);
+    const warehouseWhere = scope.warehouseIds === null ? {} : { id: { in: scope.warehouseIds } };
 
     const { searchParams } = new URL(request.url);
     const type = searchParams.get('type') || 'summary';
@@ -17,13 +22,13 @@ export async function GET(request: NextRequest) {
       case 'dashboard': {
         const [productCount, warehouseCount, inventoryCount, inboundCount, outboundCount] = await Promise.all([
           prisma.product.count({ where: { status: 1 } }),
-          prisma.warehouse.count({ where: { status: 1 } }),
-          prisma.inventory.count(),
-          prisma.inboundOrder.count(),
-          prisma.outboundOrder.count(),
+          prisma.warehouse.count({ where: { AND: [{ status: 1 }, warehouseWhere] } }),
+          prisma.inventory.count({ where: inventoryWhere }),
+          prisma.inboundOrder.count({ where: documentWhere }),
+          prisma.outboundOrder.count({ where: documentWhere }),
         ]);
 
-        const inventories = await prisma.inventory.findMany();
+        const inventories = await prisma.inventory.findMany({ where: inventoryWhere });
         let totalValue = 0;
         inventories.forEach(inv => {
           totalValue += Number(inv.avgCost || 0) * Number(inv.onHand || 0);
@@ -41,9 +46,9 @@ export async function GET(request: NextRequest) {
           include: {
             category: true,
             unit: true,
-            inventories: { include: { warehouse: true } },
-            inboundItems: { include: { order: true } },
-            outboundItems: { include: { order: true } },
+            inventories: { where: inventoryWhere, include: { warehouse: true } },
+            inboundItems: { where: { order: documentWhere }, include: { order: true } },
+            outboundItems: { where: { order: documentWhere }, include: { order: true } },
           },
           skip,
           take: pageSize,
@@ -53,27 +58,46 @@ export async function GET(request: NextRequest) {
 
         const items = products.map(p => {
           let beginQty = 0, beginAmount = 0, inQty = 0, inAmount = 0, outQty = 0, outAmount = 0, endQty = 0, endAmount = 0;
-          
-          // endQty = 当前实际库存（onHand）
+
+          // endQty = 当前实际库存（onHand）；同时算出该商品在库加权平均成本，
+          // 作为单据行成本缺失时的回落口径（见下）。
+          let invQtySum = 0, invValueSum = 0;
           p.inventories.forEach(inv => {
             const qty = Number(inv.onHand || 0);
             const cost = Number(inv.avgCost || 0);
             endQty += qty;
             endAmount += qty * cost;
+            invQtySum += qty;
+            invValueSum += qty * cost;
           });
+          const fallbackCost = invQtySum > 0 && invValueSum > 0
+            ? invValueSum / invQtySum
+            : (p as any).defaultCost ? Number((p as any).defaultCost) : 0;
+          // 单行金额口径（v1.2.4 B 统一）：优先用行上已存的 amount，
+          // 其次 qty × costPrice，最后 qty × 在库加权平均成本。
+          // 数量非 0 且成本 > 0 时金额一定非 0。
+          const lineAmount = (item: any) => {
+            const qty = Math.abs(Number(item.quantity || 0));
+            if (qty <= 0) return 0;
+            if (item.amount != null && Number(item.amount) !== 0) return Math.abs(Number(item.amount));
+            if (item.costPrice != null) return qty * Number(item.costPrice);
+            return qty * fallbackCost;
+          };
 
           // 期间入库
           p.inboundItems.forEach(item => {
             const qty = Number(item.quantity || 0);
-            const price = Number(item.costPrice || 0);
             inQty += qty;
-            inAmount += qty * price;
+            inAmount += lineAmount(item);
           });
 
           // 期间出库
+          // v1.2.4 B 修复：此前这里只累加了 outQty，从未累加 outAmount，
+          // 导致收发存报表「出库量非 0、出库金额恒为 0」，期初金额也被带偏。
           p.outboundItems.forEach(item => {
             const qty = Number(item.quantity || 0);
             outQty += qty;
+            outAmount += lineAmount(item);
           });
 
           // 期初 = 期末 - 入 + 出
@@ -103,18 +127,42 @@ export async function GET(request: NextRequest) {
       case 'turnover':
       case 'TURNOVER': {
         // 周转率 = 期间出库成本 / 平均库存金额
-        const inventories = await prisma.inventory.findMany();
+        const inventories = await prisma.inventory.findMany({ where: inventoryWhere });
         let totalStockValue = 0;
         inventories.forEach(inv => {
           totalStockValue += Number(inv.onHand || 0) * Number(inv.avgCost || 0);
         });
+        // v1.2.4 B：出库行 costPrice 为空时回落到该商品在库加权平均成本，
+        // 否则出库成本会被算成 0（有量无价）。
+        const avgCostByProduct = new Map<number, number>();
+        {
+          const qtyMap = new Map<number, number>();
+          const valMap = new Map<number, number>();
+          inventories.forEach(inv => {
+            const pid = Number(inv.productId);
+            const q = Number(inv.onHand || 0);
+            const c = Number(inv.avgCost || 0);
+            qtyMap.set(pid, (qtyMap.get(pid) || 0) + q);
+            valMap.set(pid, (valMap.get(pid) || 0) + q * c);
+          });
+          qtyMap.forEach((q, pid) => {
+            if (q > 0) avgCostByProduct.set(pid, (valMap.get(pid) || 0) / q);
+          });
+        }
 
         const outboundItems = await prisma.outboundItem.findMany({
+          where: { order: documentWhere },
           include: { order: true },
         });
         let totalOutboundCost = 0;
         outboundItems.forEach(item => {
-          totalOutboundCost += Number(item.quantity || 0) * Number(item.unitPrice || 0);
+          const qty = Number(item.quantity || 0);
+          const cost = item.amount != null && Number(item.amount) !== 0
+            ? Math.abs(Number(item.amount)) / (Math.abs(qty) || 1)
+            : item.costPrice != null
+              ? Number(item.costPrice)
+              : (avgCostByProduct.get(Number(item.productId)) || 0);
+          totalOutboundCost += qty * cost;
         });
 
         const avgStockValue = totalStockValue / 2 || 1;
@@ -127,7 +175,7 @@ export async function GET(request: NextRequest) {
           totalOutboundCost: Math.round(totalOutboundCost),
           avgStockValue: Math.round(avgStockValue),
           formula: '库存周转率 = 期间出库成本 ÷ 平均库存金额',
-          explanation: `出库成本 ¥${Math.round(totalOutboundCost)} ÷ 平均库存 ¥${Math.round(avgStockValue)} = ${turnoverRate || 8.2} 次`,
+          explanation: `出库成本 ${formatMoney(totalOutboundCost)} ÷ 平均库存 ${formatMoney(avgStockValue)} = ${turnoverRate || 8.2} 次`,
         });
       }
 
@@ -138,7 +186,7 @@ export async function GET(request: NextRequest) {
         
         // 获取所有有库存的商品及其最早入库时间
         const inventories = await prisma.inventory.findMany({
-          where: { onHand: { gt: 0 } },
+          where: withWarehouseScope({ onHand: { gt: 0 } }, scope),
           include: {
             product: true,
             warehouse: true,
@@ -147,6 +195,7 @@ export async function GET(request: NextRequest) {
 
         // 获取入库记录来确定最早入库时间
         const inboundItems = await prisma.inboundItem.findMany({
+          where: { order: documentWhere },
           include: { order: true },
           orderBy: { order: { createdAt: 'asc' } },
         });
@@ -219,11 +268,11 @@ export async function GET(request: NextRequest) {
           include: {
             category: { select: { name: true } },
             unit: { select: { name: true } },
-            inventories: true,
+            inventories: { where: inventoryWhere },
           },
         });
 
-        const lots = await prisma.inventoryLot.findMany({ where: { status: 1 }, orderBy: { createdAt: 'asc' } });
+        const lots = await prisma.inventoryLot.findMany({ where: withWarehouseScope({ status: 1 }, scope), orderBy: { createdAt: 'asc' } });
         const lotsByProduct = new Map<number, any[]>();
         lots.forEach(l => {
           const k = Number(l.productId);
@@ -282,6 +331,7 @@ export async function GET(request: NextRequest) {
       case 'cost-snapshots': {
         // 从cost_snapshots表查询已生成的快照
         const snapshots = await prisma.costSnapshot.findMany({
+          where: inventoryWhere,
           include: {
             product: { select: { code: true, name: true } },
           },
@@ -321,7 +371,7 @@ export async function GET(request: NextRequest) {
         startDate.setHours(0, 0, 0, 0);
 
         const txns = await prisma.inventoryTransaction.findMany({
-          where: { createdAt: { gte: startDate } },
+          where: withWarehouseScope({ createdAt: { gte: startDate } }, scope),
           select: { txnType: true, quantity: true, createdAt: true },
         });
 

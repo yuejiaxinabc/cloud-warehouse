@@ -1,3 +1,5 @@
+import { AppError } from '@/lib/errors';
+import { assertPositiveQty, assertNonNegativePrice } from '@/lib/qty-guard';
 import { prisma } from '@/lib/prisma';
 import { StockInService } from '@/services/stock-in.service';
 
@@ -91,8 +93,9 @@ export async function inboundPurchaseRequest(
   operatorId?: number
 ) {
   const { warehouseId, locationId, boxId, unitCost } = params;
-  const qty = Number(request.quantity);
-  const cost = unitCost ? Number(unitCost) : 0;
+  const qty = assertPositiveQty(request.quantity);
+  const cost = assertNonNegativePrice(unitCost ?? 0);
+  if (boxId) throw new AppError('采购入库请直接选择货位，盒子级分配暂未支持', 400);
 
   // 1. 查找已有商品，不存在才创建（防重复建档）
   const { product } = await findOrCreateProduct(
@@ -112,6 +115,7 @@ export async function inboundPurchaseRequest(
       {
         productId: Number(product.id),
         quantity: qty,
+        locationId,
         costPrice: cost > 0 ? cost : undefined,
       },
     ],
@@ -119,51 +123,7 @@ export async function inboundPurchaseRequest(
   });
   await StockInService.post(Number(order.id), operatorId);
 
-  // 3. 写入库位库存（LocationStock）
-  const inventory = await prisma.inventory.findUnique({
-    where: {
-      productId_warehouseId_skuVariantId: {
-        productId: product.id,
-        warehouseId: BigInt(warehouseId),
-        skuVariantId: 0,
-      },
-    },
-  });
-  if (inventory) {
-    const targetBoxId = boxId ? Number(boxId) : null;
-    const existingLocStock = await prisma.locationStock.findFirst({
-      where: {
-        inventoryId: inventory.id,
-        locationId: BigInt(locationId),
-        boxId: targetBoxId !== null ? BigInt(targetBoxId) : null,
-      },
-    });
-    // 批次号取该商品在该仓库最新的批次
-    const latestLot = await prisma.inventoryLot.findFirst({
-      where: { productId: product.id, warehouseId: BigInt(warehouseId) },
-      orderBy: { id: 'desc' },
-      select: { lotNumber: true },
-    });
-
-    if (existingLocStock) {
-      await prisma.locationStock.update({
-        where: { id: existingLocStock.id },
-        data: { quantity: { increment: qty } },
-      });
-    } else {
-      await prisma.locationStock.create({
-        data: {
-          inventoryId: inventory.id,
-          productId: product.id,
-          warehouseId: BigInt(warehouseId),
-          locationId: BigInt(locationId),
-          boxId: targetBoxId !== null ? BigInt(targetBoxId) : null,
-          lotNumber: latestLot?.lotNumber || null,
-          quantity: qty,
-        },
-      });
-    }
-  }
-
+  // StockInService.post already synchronizes location stocks in its inventory transaction.
+  // Do not write locationStock a second time after posting.
   return { order, product };
 }

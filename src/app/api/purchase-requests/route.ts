@@ -1,12 +1,16 @@
+import { businessAccess, assertWarehouseAllowed } from '@/app/api/warehouse/access';
+import { withDocumentScope, assertDocumentAllowed } from '@/lib/data-scope';
+import { handleApiError } from '@/lib/errors';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
-import { requireAuth, authErrorResponse } from '@/lib/auth-guard';
+import { requireAuth, authErrorResponse, requirePermission } from '@/lib/auth-guard';
+import { createWithOrderNo } from '@/lib/order-no';
 
 // GET - 购买申请列表
 export async function GET(req: NextRequest) {
   try {
-    await requireAuth(req);
+    const { scope, user } = await businessAccess(['purchase:view', 'stock_in:view']);
     const { searchParams } = new URL(req.url);
     const keyword = searchParams.get('keyword') || '';
     const status = searchParams.get('status') || '';
@@ -26,7 +30,7 @@ export async function GET(req: NextRequest) {
 
     const [items, total] = await Promise.all([
       prisma.purchaseRequest.findMany({
-        where,
+        where: withDocumentScope(where, scope, user, { field: 'applicantId' }),
         include: {
           warehouse: { select: { id: true, name: true, code: true } },
           location: { select: { id: true, name: true, code: true } },
@@ -37,19 +41,20 @@ export async function GET(req: NextRequest) {
         take: pageSize,
         orderBy: { id: 'desc' },
       }),
-      prisma.purchaseRequest.count({ where }),
+      prisma.purchaseRequest.count({ where: withDocumentScope(where, scope, user, { field: 'applicantId' }) }),
     ]);
 
     return NextResponse.json(serializeBigInt({ success: true, data: { items, total, page, pageSize } }));
   } catch (error: any) {
-    return authErrorResponse(error);
+    return handleApiError(error);
   }
 }
 
 // POST - 提交购买申请（所有登录用户）
 export async function POST(req: NextRequest) {
   try {
-    const auth = await requireAuth(req);
+    // v1.2.1：采购申请可由采购员或仓库主管发起（P0-1）
+    const { session: auth, scope } = await businessAccess(['purchase:create', 'stock_in:create']);
     const body = await req.json();
     const { name, model, color, size, quantity, remark, autoInbound, warehouseId, locationId } = body;
 
@@ -61,35 +66,36 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: '数量必须大于 0' }, { status: 400 });
     }
 
-    // 生成申请单号：GQ + 日期 + 当日序号
-    const now = new Date();
-    const dateStr = now.getFullYear() + String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0');
-    const count = await prisma.purchaseRequest.count({
-      where: { requestNo: { startsWith: 'GQ' + dateStr } },
-    });
-    const requestNo = 'GQ' + dateStr + '-' + String(count + 1).padStart(4, '0');
+    // requirePermission returns the checked Session, not requireAuth's AuthResult.
+    const sessionUser = auth.user as { id: string; name?: string | null; username?: string };
 
-    const sessionUser = auth.type === 'session' ? (auth.session.user as any) : null;
-
-    const request = await prisma.purchaseRequest.create({
-      data: {
-        requestNo,
-        name: String(name).trim(),
-        model: model ? String(model).trim() : null,
-        color: color ? String(color).trim() : null,
-        size: size ? String(size).trim() : null,
-        quantity: qty,
-        remark: remark || null,
-        autoInbound: !!autoInbound,
-        warehouseId: warehouseId ? Number(warehouseId) : null,
-        locationId: locationId ? Number(locationId) : null,
-        applicant: sessionUser?.name || sessionUser?.username || null,
-        applicantId: sessionUser?.id ? Number(sessionUser.id) : null,
-      },
+    if (warehouseId) await assertWarehouseAllowed(scope, Number(warehouseId));
+    // 申请单号：GQ + 日期 + 当日序号
+    // P1-11：改走 order-no 生成器（requestNo 字段），唯一约束冲突自动换号重试
+    const request = await createWithOrderNo(prisma, {
+      model: 'purchaseRequest',
+      prefix: 'GQ',
+      field: 'requestNo',
+      create: (requestNo) => prisma.purchaseRequest.create({
+        data: {
+          requestNo,
+          name: String(name).trim(),
+          model: model ? String(model).trim() : null,
+          color: color ? String(color).trim() : null,
+          size: size ? String(size).trim() : null,
+          quantity: qty,
+          remark: remark || null,
+          autoInbound: !!autoInbound,
+          warehouseId: warehouseId ? Number(warehouseId) : null,
+          locationId: locationId ? Number(locationId) : null,
+          applicant: sessionUser?.name || sessionUser?.username || null,
+          applicantId: sessionUser?.id ? Number(sessionUser.id) : null,
+        },
+      }),
     });
 
     return NextResponse.json(serializeBigInt({ success: true, data: request }));
   } catch (error: any) {
-    return authErrorResponse(error);
+    return handleApiError(error);
   }
 }

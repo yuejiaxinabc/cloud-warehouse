@@ -1,8 +1,10 @@
+import { getDataScope, withWarehouseScope, withDocumentScope, assertWarehouseAllowed, assertDocumentAllowed, type DataScope } from '@/lib/data-scope';
+import { requireAuth, requirePermission } from '@/lib/auth-guard';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { serializeBigInt } from '@/lib/serialize';
-import { requireAuth } from '@/lib/auth-guard';
 import { writeLog, getClientIp } from '@/lib/log';
+import { handleApiError } from '@/lib/errors';
 
 /**
  * POST /api/inventory/lots/[id]/status  { action: 'freeze' | 'unfreeze' }
@@ -12,9 +14,10 @@ import { writeLog, getClientIp } from '@/lib/log';
  * 避免出库时被误占用。解冻时原样退回。
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireAuth(req);
   try {
-    const uid = (auth as any)?.session?.user?.id;
+    const auth = await requireAuth(req);
+    await requirePermission('inventory:manage', auth);
+    const uid = auth.user.id;
     const body = await req.json().catch(() => ({}));
     const action = String(body?.action || '');
     if (action !== 'freeze' && action !== 'unfreeze') {
@@ -28,6 +31,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     });
     if (!lot) return NextResponse.json({ success: false, error: '批次不存在' }, { status: 404 });
 
+    await assertWarehouseAllowed(await getDataScope(auth.user), lot.warehouseId);
     const qty = Number(lot.quantity || 0);
     const isFrozen = lot.status === 2;
 
@@ -75,6 +79,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     return NextResponse.json(serializeBigInt({ success: true, data: { lotNumber: result.lotNumber, frozen: action === 'freeze' } }));
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message || '操作失败' }, { status: 500 });
+    return handleApiError(error);
   }
 }

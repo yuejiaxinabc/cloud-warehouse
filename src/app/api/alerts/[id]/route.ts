@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { getServerSession } from 'next-auth';
+import { requirePermission, getSessionChecked } from '@/lib/auth-guard';
 import { authOptions } from '@/lib/auth';
 import { AlertService } from '@/services/alert.service';
 import { idSchema } from '@/lib/validators';
@@ -13,8 +13,10 @@ export async function PUT(
   { params }: { params: { id: string } }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await getSessionChecked();
     if (!session) return errorResponse('请先登录', 401);
+    // v1.2.1：预警处理（确认/忽略）需 alert:manage
+    await requirePermission('alert:manage');
 
     const { id } = idSchema.parse({ id: params.id });
     const body = await request.json();
