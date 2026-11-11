@@ -2,9 +2,11 @@
 
 | 文档 | 面向 | 内容 |
 |---|---|---|
-| [云仓用户手册-v1.2.0.pdf](云仓用户手册-v1.2.0.pdf) | 业务用户 | 全模块操作、字段说明、FAQ、附录（27 页） |
+| **[UPDATE-2026-11-11-v127.md](UPDATE-2026-11-11-v127.md)** | 全员 | **v1.2.5 ~ v1.2.7 变更说明**：并发扣库存、备份回滚、更新中心与双通道 |
+| [UPDATE-2026-11-11.md](UPDATE-2026-11-11.md) | 全员 | v1.2.4 更新说明（苹果风 UI / 数据口径 / 页面体验） |
+| [云仓用户手册-v1.2.0.pdf](云仓用户手册-v1.2.0.pdf) | 业务用户 | 全模块操作、字段说明、FAQ、附录（27 页，**基于 v1.2.0**；v1.2.1+ 增量见 CHANGELOG 与 UPDATE 文档） |
 | [云仓用户手册-v1.2.0.docx](云仓用户手册-v1.2.0.docx) | 手册维护者 | 可编辑源文件 |
-| [CHANGELOG.md](CHANGELOG.md) | 全员 | 版本历史与迭代路线 |
+| [CHANGELOG.md](CHANGELOG.md) | 全员 | 版本历史与迭代路线（最新 v1.2.7） |
 | [ROADMAP-v1.2.md](ROADMAP-v1.2.md) | 产品/实施 | 需求核对与优先级排期 |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | 运维 | 从零部署（MySQL / Nginx / systemd） |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | 开发 | 目录结构、业务规则、编码约定 |
